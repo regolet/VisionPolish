@@ -4,6 +4,7 @@ CREATE TABLE public.profiles (
   full_name TEXT,
   avatar_url TEXT,
   phone TEXT,
+  role TEXT DEFAULT 'customer' CHECK (role IN ('customer', 'editor', 'staff', 'admin')),
   created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
   updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
 );
@@ -52,13 +53,18 @@ CREATE TABLE public.order_items (
 CREATE TABLE public.uploaded_images (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   order_item_id UUID REFERENCES public.order_items(id) ON DELETE CASCADE,
+  cart_item_id UUID REFERENCES public.cart_items(id) ON DELETE CASCADE,
   original_url TEXT NOT NULL,
   processed_url TEXT,
   file_name TEXT NOT NULL,
   file_size INTEGER,
   mime_type TEXT,
   upload_status TEXT DEFAULT 'pending',
-  created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+  created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+  CONSTRAINT uploaded_images_reference_check CHECK (
+    (order_item_id IS NOT NULL AND cart_item_id IS NULL) OR
+    (order_item_id IS NULL AND cart_item_id IS NOT NULL)
+  )
 );
 
 -- Cart table for temporary storage
@@ -111,12 +117,64 @@ CREATE POLICY "Users can view own orders" ON public.orders
 CREATE POLICY "Users can create own orders" ON public.orders
   FOR INSERT WITH CHECK (auth.uid() = user_id);
 
+-- Order items policies
+CREATE POLICY "Users can view order items for their orders" ON public.order_items
+  FOR SELECT USING (
+    EXISTS (
+      SELECT 1 FROM public.orders 
+      WHERE orders.id = order_items.order_id 
+      AND orders.user_id = auth.uid()
+    )
+  );
+
+CREATE POLICY "Users can create order items for their orders" ON public.order_items
+  FOR INSERT WITH CHECK (
+    EXISTS (
+      SELECT 1 FROM public.orders 
+      WHERE orders.id = order_items.order_id 
+      AND orders.user_id = auth.uid()
+    )
+  );
+
 -- Cart policies
 CREATE POLICY "Users can view own cart" ON public.cart_items
   FOR SELECT USING (auth.uid() = user_id);
 
 CREATE POLICY "Users can manage own cart" ON public.cart_items
   FOR ALL USING (auth.uid() = user_id);
+
+-- Uploaded images policies
+CREATE POLICY "Users can view images for their order items" ON public.uploaded_images
+  FOR SELECT USING (
+    EXISTS (
+      SELECT 1 FROM public.order_items oi
+      JOIN public.orders o ON o.id = oi.order_id
+      WHERE oi.id = uploaded_images.order_item_id 
+      AND o.user_id = auth.uid()
+    )
+    OR 
+    EXISTS (
+      SELECT 1 FROM public.cart_items ci
+      WHERE ci.id = uploaded_images.cart_item_id
+      AND ci.user_id = auth.uid()
+    )
+  );
+
+CREATE POLICY "Users can create images for their order items" ON public.uploaded_images
+  FOR INSERT WITH CHECK (
+    EXISTS (
+      SELECT 1 FROM public.order_items oi
+      JOIN public.orders o ON o.id = oi.order_id
+      WHERE oi.id = uploaded_images.order_item_id 
+      AND o.user_id = auth.uid()
+    )
+    OR 
+    EXISTS (
+      SELECT 1 FROM public.cart_items ci
+      WHERE ci.id = uploaded_images.cart_item_id
+      AND ci.user_id = auth.uid()
+    )
+  );
 
 -- Reviews policies
 CREATE POLICY "Reviews are viewable by everyone" ON public.reviews
@@ -145,3 +203,19 @@ CREATE TRIGGER update_orders_updated_at BEFORE UPDATE ON public.orders
 
 CREATE TRIGGER update_cart_items_updated_at BEFORE UPDATE ON public.cart_items
   FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
+
+-- Create storage bucket for photos
+INSERT INTO storage.buckets (id, name, public) VALUES ('photos', 'photos', true);
+
+-- Storage policies for photos bucket
+CREATE POLICY "Photos are publicly accessible" ON storage.objects
+  FOR SELECT USING (bucket_id = 'photos');
+
+CREATE POLICY "Authenticated users can upload photos" ON storage.objects
+  FOR INSERT WITH CHECK (bucket_id = 'photos' AND auth.role() = 'authenticated');
+
+CREATE POLICY "Users can update their own photos" ON storage.objects
+  FOR UPDATE USING (bucket_id = 'photos' AND auth.uid()::text = (storage.foldername(name))[1]);
+
+CREATE POLICY "Users can delete their own photos" ON storage.objects
+  FOR DELETE USING (bucket_id = 'photos' AND auth.uid()::text = (storage.foldername(name))[1]);

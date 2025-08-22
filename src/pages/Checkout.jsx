@@ -1,10 +1,11 @@
 import { useState, useEffect } from 'react'
-import { useParams, useNavigate } from 'react-router-dom'
+import { useNavigate, useSearchParams } from 'react-router-dom'
 import { supabase } from '../lib/supabase'
-import { Upload, CreditCard, Check, ArrowRight } from 'lucide-react'
+import { CreditCard, Check, ArrowRight, Image } from 'lucide-react'
 
 export default function Checkout() {
-  const { orderId } = useParams()
+  const [searchParams] = useSearchParams()
+  const orderId = searchParams.get('order')
   const navigate = useNavigate()
   const [order, setOrder] = useState(null)
   const [orderItems, setOrderItems] = useState([])
@@ -101,15 +102,7 @@ export default function Checkout() {
     setProcessing(true)
 
     try {
-      // Upload all images
-      for (const item of orderItems) {
-        const files = uploadedFiles[item.id]
-        if (files && files.length > 0) {
-          await uploadImagesToSupabase(item.id, files)
-        }
-      }
-
-      // Update order status
+      // Update order status (images are already uploaded from cart)
       const { error } = await supabase
         .from('orders')
         .update({
@@ -119,9 +112,15 @@ export default function Checkout() {
         })
         .eq('id', orderId)
 
-      if (!error) {
-        navigate(`/order-success/${orderId}`)
+      if (error) {
+        console.error('Payment update error:', error)
+        alert('Payment processing failed. Please try again.')
+        return
       }
+
+      // Navigate to success page
+      navigate(`/order-success?order=${orderId}`)
+      
     } catch (error) {
       console.error('Payment processing error:', error)
       alert('An error occurred during payment processing')
@@ -161,49 +160,68 @@ export default function Checkout() {
 
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
           <div className="lg:col-span-2 space-y-6">
-            {/* Upload Section */}
+            {/* Order Details Section */}
             <div className="bg-white rounded-lg shadow-md p-6">
               <h2 className="text-xl font-semibold mb-4 flex items-center">
-                <Upload className="mr-2 h-5 w-5" />
-                Upload Your Photos
+                <Image className="mr-2 h-5 w-5" />
+                Order Details
               </h2>
+              <div className="mb-4 p-3 bg-green-50 border border-green-200 rounded-lg">
+                <p className="text-sm text-green-700 flex items-center">
+                  <Check className="h-4 w-4 mr-2" />
+                  Your photos have been uploaded and are ready for editing!
+                </p>
+              </div>
               
               {orderItems.map((item) => (
                 <div key={item.id} className="mb-6 pb-6 border-b last:border-b-0">
-                  <h3 className="font-medium mb-3">
-                    {item.service?.name} - {item.quantity} image(s)
+                  <h3 className="font-semibold text-lg mb-3">
+                    {item.service?.name}
                   </h3>
+                  <p className="text-gray-600 mb-4">{item.service?.description}</p>
                   
-                  <div className="border-2 border-dashed border-gray-300 rounded-lg p-6">
-                    <input
-                      type="file"
-                      multiple
-                      accept="image/*"
-                      onChange={(e) => handleFileUpload(item.id, e.target.files)}
-                      className="hidden"
-                      id={`file-${item.id}`}
-                    />
-                    <label
-                      htmlFor={`file-${item.id}`}
-                      className="cursor-pointer flex flex-col items-center"
-                    >
-                      <Upload className="h-12 w-12 text-gray-400 mb-3" />
-                      <span className="text-gray-600">
-                        Click to upload or drag and drop
-                      </span>
-                      <span className="text-sm text-gray-500 mt-1">
-                        PNG, JPG up to 10MB each
-                      </span>
-                    </label>
-                    
-                    {uploadedFiles[item.id] && (
-                      <div className="mt-4">
-                        <p className="text-sm text-green-600 flex items-center">
-                          <Check className="h-4 w-4 mr-1" />
-                          {uploadedFiles[item.id].length} file(s) selected
-                        </p>
+                  {/* Display uploaded photos */}
+                  {item.specifications?.photos && item.specifications.photos.length > 0 && (
+                    <div className="mb-4">
+                      <p className="text-sm font-medium text-gray-700 mb-3">
+                        Photos to be edited ({item.specifications.photos.length}):
+                      </p>
+                      <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-3">
+                        {item.specifications.photos.map((photo, index) => (
+                          <div key={index} className="relative">
+                            <img
+                              src={photo.url}
+                              alt={photo.filename}
+                              className="w-full h-24 object-cover rounded-lg border border-gray-200"
+                            />
+                            <div className="absolute inset-0 bg-green-500 bg-opacity-20 rounded-lg flex items-center justify-center">
+                              <Check className="h-6 w-6 text-green-600" />
+                            </div>
+                          </div>
+                        ))}
                       </div>
-                    )}
+                    </div>
+                  )}
+                  
+                  {/* Display special instructions */}
+                  {item.specifications?.notes && (
+                    <div className="p-3 bg-blue-50 border border-blue-200 rounded-lg">
+                      <p className="text-sm font-medium text-blue-800 mb-1">Special Instructions:</p>
+                      <p className="text-sm text-blue-700">{item.specifications.notes}</p>
+                    </div>
+                  )}
+                  
+                  <div className="mt-4 flex justify-between items-center">
+                    <div>
+                      <p className="text-sm text-gray-600">Service Price: ${item.service?.base_price} per image</p>
+                      <p className="text-sm text-gray-600">Turnaround: {item.service?.turnaround_time}</p>
+                    </div>
+                    <div className="text-right">
+                      <p className="text-lg font-semibold text-purple-600">
+                        ${(item.price * item.quantity).toFixed(2)}
+                      </p>
+                      <p className="text-sm text-gray-500">{item.quantity} image{item.quantity !== 1 ? 's' : ''}</p>
+                    </div>
                   </div>
                 </div>
               ))}
@@ -293,24 +311,22 @@ export default function Checkout() {
                 
                 <button
                   onClick={processPayment}
-                  disabled={processing || Object.keys(uploadedFiles).length === 0}
+                  disabled={processing}
                   className="w-full bg-purple-600 text-white py-3 rounded-lg hover:bg-purple-700 transition font-semibold disabled:bg-gray-400 disabled:cursor-not-allowed flex items-center justify-center"
                 >
                   {processing ? (
                     <div className="animate-spin rounded-full h-5 w-5 border-b-2 border-white"></div>
                   ) : (
                     <>
-                      Complete Order
+                      Complete Order & Pay ${order.total_amount}
                       <ArrowRight className="ml-2 h-5 w-5" />
                     </>
                   )}
                 </button>
                 
-                {Object.keys(uploadedFiles).length === 0 && (
-                  <p className="text-sm text-red-500 mt-2 text-center">
-                    Please upload images to continue
-                  </p>
-                )}
+                <p className="text-xs text-gray-500 mt-3 text-center">
+                  By completing this order, you agree to our terms of service and privacy policy. Your images will be processed within the specified turnaround time.
+                </p>
               </div>
             </div>
           </div>

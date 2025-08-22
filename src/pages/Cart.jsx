@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react'
-import { Trash2, Plus, Minus, ShoppingBag, ArrowRight } from 'lucide-react'
+import { Trash2, ShoppingBag, ArrowRight } from 'lucide-react'
 import { supabase } from '../lib/supabase'
 import { Link, useNavigate } from 'react-router-dom'
 
@@ -43,18 +43,6 @@ export default function Cart() {
     setLoading(false)
   }
 
-  const updateQuantity = async (itemId, newQuantity) => {
-    if (newQuantity < 1) return
-
-    const { error } = await supabase
-      .from('cart_items')
-      .update({ quantity: newQuantity })
-      .eq('id', itemId)
-
-    if (!error) {
-      fetchCartItems()
-    }
-  }
 
   const removeItem = async (itemId) => {
     const { error } = await supabase
@@ -76,42 +64,63 @@ export default function Cart() {
   const proceedToCheckout = async () => {
     if (cartItems.length === 0) return
 
-    const orderNumber = `ORD-${Date.now()}`
-    const totalAmount = calculateTotal()
+    try {
+      const orderNumber = `ORD-${Date.now()}`
+      const totalAmount = parseFloat(calculateTotal())
 
-    const { data: orderData, error: orderError } = await supabase
-      .from('orders')
-      .insert({
-        user_id: user.id,
-        order_number: orderNumber,
-        status: 'pending',
-        total_amount: totalAmount,
-        payment_status: 'pending'
-      })
-      .select()
-      .single()
+      const { data: orderData, error: orderError } = await supabase
+        .from('orders')
+        .insert({
+          user_id: user.id,
+          order_number: orderNumber,
+          status: 'pending',
+          total_amount: totalAmount,
+          payment_status: 'pending'
+        })
+        .select()
+        .single()
 
-    if (!orderError && orderData) {
-      const orderItems = cartItems.map(item => ({
-        order_id: orderData.id,
-        service_id: item.service_id,
-        quantity: item.quantity,
-        price: item.service.base_price,
-        specifications: item.specifications
-      }))
+      if (orderError) {
+        console.error('Order creation error:', orderError)
+        alert('Failed to create order. Please try again.')
+        return
+      }
 
-      const { error: itemsError } = await supabase
-        .from('order_items')
-        .insert(orderItems)
+      if (orderData) {
+        const orderItems = cartItems.map(item => ({
+          order_id: orderData.id,
+          service_id: item.service_id,
+          quantity: item.quantity,
+          price: item.service.base_price,
+          specifications: item.specifications
+        }))
 
-      if (!itemsError) {
-        await supabase
+        const { error: itemsError } = await supabase
+          .from('order_items')
+          .insert(orderItems)
+
+        if (itemsError) {
+          console.error('Order items error:', itemsError)
+          alert('Failed to create order items. Please try again.')
+          return
+        }
+
+        // Clear cart
+        const { error: clearCartError } = await supabase
           .from('cart_items')
           .delete()
           .eq('user_id', user.id)
 
-        navigate(`/checkout/${orderData.id}`)
+        if (clearCartError) {
+          console.error('Clear cart error:', clearCartError)
+        }
+
+        // Navigate to checkout
+        navigate(`/checkout?order=${orderData.id}`)
       }
+    } catch (error) {
+      console.error('Checkout error:', error)
+      alert('Something went wrong. Please try again.')
     }
   }
 
@@ -160,31 +169,64 @@ export default function Cart() {
                         <p className="text-gray-600 text-sm mb-4">
                           {item.service?.description}
                         </p>
-                        <div className="flex items-center space-x-4">
-                          <div className="flex items-center border rounded-lg">
+                        
+                        {/* Display each uploaded photo as separate line item */}
+                        {item.specifications?.photos && item.specifications.photos.length > 0 ? (
+                          <div className="space-y-3">
+                            {item.specifications.photos.map((photo, index) => (
+                              <div key={index} className="flex items-center justify-between p-3 bg-gray-50 rounded-lg">
+                                <div className="flex items-center space-x-3">
+                                  <img
+                                    src={photo.url}
+                                    alt={photo.filename}
+                                    className="w-12 h-12 object-cover rounded-lg border border-gray-200"
+                                  />
+                                  <div className="flex-1 min-w-0">
+                                    <p className="text-sm font-medium text-gray-800 truncate" title={photo.filename}>
+                                      {photo.filename}
+                                    </p>
+                                    <p className="text-xs text-gray-500">${item.service?.base_price} per image</p>
+                                  </div>
+                                </div>
+                                <div className="text-right">
+                                  <p className="text-lg font-semibold text-purple-600">
+                                    ${item.service?.base_price}
+                                  </p>
+                                </div>
+                              </div>
+                            ))}
+                            
+                            {/* Display special instructions */}
+                            {item.specifications?.notes && (
+                              <div className="p-3 bg-blue-50 border border-blue-200 rounded-lg">
+                                <p className="text-sm font-medium text-blue-800 mb-1">Special Instructions:</p>
+                                <p className="text-sm text-blue-700">{item.specifications.notes}</p>
+                              </div>
+                            )}
+                            
+                            <div className="flex justify-end">
+                              <button
+                                onClick={() => removeItem(item.id)}
+                                className="text-red-500 hover:text-red-700 transition flex items-center text-sm"
+                              >
+                                <Trash2 className="h-4 w-4 mr-1" />
+                                Remove All Photos
+                              </button>
+                            </div>
+                          </div>
+                        ) : (
+                          <div className="flex items-center justify-between">
+                            <div className="text-sm text-gray-500">
+                              {item.quantity} × ${item.service?.base_price} each
+                            </div>
                             <button
-                              onClick={() => updateQuantity(item.id, item.quantity - 1)}
-                              className="p-2 hover:bg-gray-100 transition"
+                              onClick={() => removeItem(item.id)}
+                              className="text-red-500 hover:text-red-700 transition"
                             >
-                              <Minus className="h-4 w-4" />
-                            </button>
-                            <span className="px-4 py-2 font-medium">
-                              {item.quantity}
-                            </span>
-                            <button
-                              onClick={() => updateQuantity(item.id, item.quantity + 1)}
-                              className="p-2 hover:bg-gray-100 transition"
-                            >
-                              <Plus className="h-4 w-4" />
+                              <Trash2 className="h-5 w-5" />
                             </button>
                           </div>
-                          <button
-                            onClick={() => removeItem(item.id)}
-                            className="text-red-500 hover:text-red-700 transition"
-                          >
-                            <Trash2 className="h-5 w-5" />
-                          </button>
-                        </div>
+                        )}
                       </div>
                       <div className="text-right ml-4">
                         <p className="text-2xl font-bold text-purple-600">

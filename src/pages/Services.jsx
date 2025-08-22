@@ -2,6 +2,7 @@ import { useState, useEffect } from 'react'
 import { ShoppingCart, Clock, Check } from 'lucide-react'
 import { supabase } from '../lib/supabase'
 import { useNavigate } from 'react-router-dom'
+import ServiceOrderModal from '../components/ServiceOrderModal'
 
 const serviceCategories = [
   { id: 'all', name: 'All Services' },
@@ -16,6 +17,8 @@ export default function Services() {
   const [selectedCategory, setSelectedCategory] = useState('all')
   const [loading, setLoading] = useState(true)
   const [user, setUser] = useState(null)
+  const [selectedService, setSelectedService] = useState(null)
+  const [isModalOpen, setIsModalOpen] = useState(false)
   const navigate = useNavigate()
 
   useEffect(() => {
@@ -38,96 +41,33 @@ export default function Services() {
 
     const { data, error } = await query
 
-    if (!error) {
-      setServices(data || getDefaultServices())
+    if (!error && data) {
+      setServices(data)
     } else {
-      setServices(getDefaultServices())
+      console.error('Error fetching services:', error)
+      setServices([])
     }
     setLoading(false)
   }
 
-  const getDefaultServices = () => [
-    {
-      id: '1',
-      name: 'Basic Photo Retouching',
-      description: 'Perfect for portraits and headshots. Includes skin smoothing, blemish removal, teeth whitening, and basic color correction.',
-      category: 'portrait',
-      base_price: 15.00,
-      turnaround_time: '24 hours',
-      features: ['Skin smoothing', 'Blemish removal', 'Teeth whitening', 'Eye enhancement', 'Basic color correction'],
-      image_url: 'https://images.unsplash.com/photo-1554151228-14d9def656e4?w=400'
-    },
-    {
-      id: '2',
-      name: 'Advanced Portrait Editing',
-      description: 'Comprehensive portrait editing with advanced techniques for professional results.',
-      category: 'portrait',
-      base_price: 35.00,
-      turnaround_time: '48 hours',
-      features: ['All basic features', 'Body contouring', 'Hair enhancement', 'Makeup enhancement', 'Advanced color grading'],
-      image_url: 'https://images.unsplash.com/photo-1544005313-94ddf0286df2?w=400'
-    },
-    {
-      id: '3',
-      name: 'Background Removal',
-      description: 'Clean and precise background removal for any image. Perfect for product photos and portraits.',
-      category: 'product',
-      base_price: 5.00,
-      turnaround_time: '12 hours',
-      features: ['Transparent background', 'White background option', 'Custom background', 'Edge refinement'],
-      image_url: 'https://images.unsplash.com/photo-1523275335684-37898b6baf30?w=400'
-    },
-    {
-      id: '4',
-      name: 'Product Photography Enhancement',
-      description: 'Make your products stand out with professional editing and enhancement.',
-      category: 'product',
-      base_price: 20.00,
-      turnaround_time: '24 hours',
-      features: ['Background removal/replacement', 'Color correction', 'Shadow creation', 'Reflection addition', 'Image sharpening'],
-      image_url: 'https://images.unsplash.com/photo-1572635196237-14b3f281503f?w=400'
-    },
-    {
-      id: '5',
-      name: 'Photo Restoration',
-      description: 'Restore old, damaged, or faded photographs to their original glory.',
-      category: 'restoration',
-      base_price: 45.00,
-      turnaround_time: '72 hours',
-      features: ['Damage repair', 'Color restoration', 'Scratch removal', 'Fade correction', 'Digital enhancement'],
-      image_url: 'https://images.unsplash.com/photo-1566438480900-0609be27a4be?w=400'
-    },
-    {
-      id: '6',
-      name: 'Creative Photo Manipulation',
-      description: 'Transform your photos with creative effects and artistic manipulation.',
-      category: 'creative',
-      base_price: 50.00,
-      turnaround_time: '72 hours',
-      features: ['Composite creation', 'Special effects', 'Artistic filters', 'Fantasy editing', 'Surreal manipulation'],
-      image_url: 'https://images.unsplash.com/photo-1501594907352-04cda38ebc29?w=400'
-    }
-  ]
 
-  const addToCart = async (service) => {
+  const handleServiceSelect = (service) => {
     if (!user) {
       navigate('/login')
       return
     }
+    setSelectedService(service)
+    setIsModalOpen(true)
+  }
 
-    const { error } = await supabase
-      .from('cart_items')
-      .insert({
-        user_id: user.id,
-        service_id: service.id,
-        quantity: 1,
-        specifications: {}
-      })
+  const handleModalClose = () => {
+    setIsModalOpen(false)
+    setSelectedService(null)
+  }
 
-    if (!error) {
-      alert('Service added to cart!')
-      window.location.reload()
-    }
+  const handleAddToCart = (cartItem) => {
+    // Refresh the page to update cart count
+    window.location.reload()
   }
 
   return (
@@ -203,11 +143,11 @@ export default function Services() {
                       <span className="text-gray-500 text-sm ml-1">/ image</span>
                     </div>
                     <button
-                      onClick={() => addToCart(service)}
+                      onClick={() => handleServiceSelect(service)}
                       className="bg-purple-600 text-white px-4 py-2 rounded-lg hover:bg-purple-700 transition flex items-center"
                     >
                       <ShoppingCart className="h-5 w-5 mr-2" />
-                      Add to Cart
+                      Upload & Order
                     </button>
                   </div>
                 </div>
@@ -216,6 +156,15 @@ export default function Services() {
           </div>
         )}
       </div>
+
+      {/* Service Order Modal */}
+      <ServiceOrderModal
+        service={selectedService}
+        isOpen={isModalOpen}
+        onClose={handleModalClose}
+        user={user}
+        onAddToCart={handleAddToCart}
+      />
     </div>
   )
 }

@@ -1,6 +1,7 @@
 import { Link } from 'react-router-dom'
 import { ArrowRight, Sparkles, Clock, Shield, DollarSign, Image, Palette, Wand2, Camera } from 'lucide-react'
 import { useState, useEffect } from 'react'
+import HowItWorks from '../components/HowItWorks'
 
 const services = [
   {
@@ -172,45 +173,7 @@ export default function Home() {
       </section>
 
       {/* How It Works Section */}
-      <section className="py-20 bg-gray-50">
-        <div className="container mx-auto px-4">
-          <div className="text-center mb-12">
-            <h2 className="text-4xl font-bold mb-4">How It Works</h2>
-            <p className="text-xl text-gray-600">
-              Simple process, amazing results
-            </p>
-          </div>
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-8">
-            <div className="text-center">
-              <div className="bg-purple-600 text-white rounded-full w-16 h-16 flex items-center justify-center mx-auto mb-4 text-2xl font-bold">
-                1
-              </div>
-              <h3 className="text-xl font-semibold mb-2">Upload Your Photos</h3>
-              <p className="text-gray-600">
-                Select your service and upload your images securely
-              </p>
-            </div>
-            <div className="text-center">
-              <div className="bg-purple-600 text-white rounded-full w-16 h-16 flex items-center justify-center mx-auto mb-4 text-2xl font-bold">
-                2
-              </div>
-              <h3 className="text-xl font-semibold mb-2">We Edit</h3>
-              <p className="text-gray-600">
-                Our expert editors work their magic on your photos
-              </p>
-            </div>
-            <div className="text-center">
-              <div className="bg-purple-600 text-white rounded-full w-16 h-16 flex items-center justify-center mx-auto mb-4 text-2xl font-bold">
-                3
-              </div>
-              <h3 className="text-xl font-semibold mb-2">Download Results</h3>
-              <p className="text-gray-600">
-                Receive your professionally edited photos within 24-48 hours
-              </p>
-            </div>
-          </div>
-        </div>
-      </section>
+      <HowItWorks />
 
       {/* CTA Section */}
       <section className="py-20 bg-gradient-to-r from-purple-600 to-blue-600 text-white">
