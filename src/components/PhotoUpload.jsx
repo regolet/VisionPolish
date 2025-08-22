@@ -115,7 +115,7 @@ export default function PhotoUpload({ onUploadComplete, maxFiles = 5, serviceId 
 
         // Upload to Supabase Storage
         const { data, error } = await supabase.storage
-          .from('photos')
+          .from('uploads')
           .upload(filePath, fileObj.file, {
             cacheControl: '3600',
             upsert: false
@@ -131,7 +131,7 @@ export default function PhotoUpload({ onUploadComplete, maxFiles = 5, serviceId 
 
         // Get public URL
         const { data: { publicUrl } } = supabase.storage
-          .from('photos')
+          .from('uploads')
           .getPublicUrl(data.path)
 
         const uploadedFile = {

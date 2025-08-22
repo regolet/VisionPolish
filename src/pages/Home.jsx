@@ -1,6 +1,7 @@
-import { Link } from 'react-router-dom'
+import { Link, useNavigate } from 'react-router-dom'
 import { ArrowRight, Sparkles, Clock, Shield, DollarSign, Image, Palette, Wand2, Camera } from 'lucide-react'
 import { useState, useEffect } from 'react'
+import { useAuth } from '../contexts/AuthContext'
 import HowItWorks from '../components/HowItWorks'
 
 const services = [
@@ -63,7 +64,17 @@ const portfolioImages = [
 ]
 
 export default function Home() {
+  const navigate = useNavigate()
+  const { user, profile, isEditor } = useAuth()
   const [currentImageIndex, setCurrentImageIndex] = useState(0)
+  
+  // Redirect editors to their dashboard
+  useEffect(() => {
+    if (user && isEditor) {
+      console.log('🎯 Editor detected, redirecting to dashboard')
+      navigate('/editor')
+    }
+  }, [user, isEditor, navigate])
 
   useEffect(() => {
     const interval = setInterval(() => {

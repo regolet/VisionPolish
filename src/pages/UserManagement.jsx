@@ -48,7 +48,7 @@ export default function UserManagement() {
     const { data: { session } } = await supabase.auth.getSession()
     
     if (!session) {
-      navigate('/admin/login')
+      navigate('/login')
       return
     }
 
@@ -59,7 +59,7 @@ export default function UserManagement() {
       .single()
 
     if (!profile || profile.role !== 'admin') {
-      navigate('/admin/login')
+      navigate('/unauthorized')
       return
     }
 
@@ -69,48 +69,36 @@ export default function UserManagement() {
   const fetchUsers = async () => {
     setLoading(true)
     try {
-      console.log('🔍 Starting fetchUsers...')
-      
       // First, get all profiles
       const { data: profiles, error: profilesError } = await supabase
         .from('profiles')
         .select('*')
         .order('created_at', { ascending: false })
 
-      console.log('📋 Profiles query result:', { profiles, profilesError })
-
       if (profilesError) {
-        console.error('❌ Error fetching profiles:', profilesError)
+        console.error('Error fetching profiles:', profilesError)
         setUsers([])
         setLoading(false)
         return
       }
 
-      console.log(`📊 Found ${profiles?.length || 0} profiles`)
-
       // Now try to fetch emails using the RPC function
-      console.log('🚀 Calling get_users_with_email RPC...')
       const { data: usersData, error: usersError } = await supabase
         .rpc('get_users_with_email')
 
-      console.log('📧 RPC result:', { usersData, usersError })
-
       if (usersError) {
-        console.error('❌ RPC Error:', usersError)
+        console.error('RPC Error:', usersError)
         // Fallback: just show profiles without emails
-        console.log('⚠️ Using fallback: profiles only')
         setUsers(profiles || [])
       } else {
-        console.log('✅ Using RPC data with emails')
         setUsers(usersData || [])
       }
       
     } catch (error) {
-      console.error('💥 Catch block error:', error)
+      console.error('Error fetching users:', error)
       setUsers([])
     }
     setLoading(false)
-    console.log('🏁 fetchUsers completed')
   }
 
   const handleInputChange = (e) => {
@@ -137,18 +125,16 @@ export default function UserManagement() {
       if (authError) throw authError
 
       if (authData.user) {
-        // Create or update profile
-        const { error: profileError } = await supabase
-          .from('profiles')
-          .upsert({
-            id: authData.user.id,
-            full_name: formData.full_name,
-            phone: formData.phone,
-            role: formData.role,
-            department: formData.department,
-            is_active: formData.is_active,
-            created_at: new Date().toISOString(),
-            updated_at: new Date().toISOString()
+        // Use admin RPC function to create profile (bypasses RLS)
+        const { data: profileData, error: profileError } = await supabase
+          .rpc('admin_create_user_profile', {
+            user_id: authData.user.id,
+            user_email: formData.email,
+            user_full_name: formData.full_name,
+            user_phone: formData.phone,
+            user_role: formData.role,
+            user_department: formData.department,
+            user_is_active: formData.is_active
           })
 
         if (profileError) throw profileError

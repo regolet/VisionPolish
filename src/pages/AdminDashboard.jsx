@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react'
 import { useNavigate, Link } from 'react-router-dom'
 import { supabase } from '../lib/supabase'
-import { Plus, Edit, Trash2, Save, X, Eye, Shield, Users, Package } from 'lucide-react'
+import { Plus, Edit, Trash2, Save, X, Eye, Shield, Users, Package, ClipboardList, Database } from 'lucide-react'
 
 export default function AdminDashboard() {
   const [services, setServices] = useState([])
@@ -35,12 +35,16 @@ export default function AdminDashboard() {
   }, [user])
 
   const checkAdminAccess = async () => {
+    console.log('🔍 AdminDashboard: Checking admin access...')
     const { data: { session } } = await supabase.auth.getSession()
     
     if (!session) {
-      navigate('/admin/login')
+      console.log('❌ AdminDashboard: No session found, redirecting to login')
+      navigate('/login')
       return
     }
+
+    console.log('👤 AdminDashboard: Session user:', session.user.email)
 
     // Check if user has admin role
     const { data: profile, error } = await supabase
@@ -49,11 +53,15 @@ export default function AdminDashboard() {
       .eq('id', session.user.id)
       .single()
 
+    console.log('🔐 AdminDashboard: Profile check result:', { profile, error })
+
     if (error || profile?.role !== 'admin') {
-      navigate('/admin/login')
+      console.log('❌ AdminDashboard: Access denied. Role:', profile?.role, 'Error:', error)
+      navigate('/unauthorized')
       return
     }
 
+    console.log('✅ AdminDashboard: Admin access granted')
     setUser(session.user)
     setChecking(false)
   }
@@ -207,6 +215,20 @@ export default function AdminDashboard() {
             >
               <Users className="h-5 w-5 mr-2" />
               Manage Users
+            </Link>
+            <Link
+              to="/admin/orders"
+              className="bg-green-600 text-white px-4 py-2 rounded-lg hover:bg-green-700 transition flex items-center"
+            >
+              <ClipboardList className="h-5 w-5 mr-2" />
+              Manage Orders
+            </Link>
+            <Link
+              to="/admin/rls"
+              className="bg-orange-600 text-white px-4 py-2 rounded-lg hover:bg-orange-700 transition flex items-center"
+            >
+              <Database className="h-5 w-5 mr-2" />
+              RLS Settings
             </Link>
             <button
               onClick={startAddNew}

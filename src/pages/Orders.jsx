@@ -86,7 +86,30 @@ export default function Orders() {
     }, 0) || 0
   }
 
+  const getImageUrl = (imagePath) => {
+    if (!imagePath) return null
+    
+    // If it's already a full URL, return as is
+    if (imagePath.startsWith('http')) {
+      return imagePath
+    }
+    
+    // Use Supabase Storage to get public URL
+    try {
+      return supabase.storage.from('uploads').getPublicUrl(imagePath).data.publicUrl
+    } catch (error) {
+      console.warn('Error getting image URL:', error)
+      return null
+    }
+  }
+
   const openOrderModal = (order) => {
+    console.log('🔍 Opening order modal for:', order)
+    console.log('📸 Order items with photos:', order.order_items?.map(item => ({
+      service: item.service?.name,
+      photos: item.specifications?.photos?.length || 0,
+      photo_urls: item.specifications?.photos?.map(p => p.url) || []
+    })))
     setSelectedOrder(order)
     setShowOrderModal(true)
   }
@@ -132,9 +155,15 @@ export default function Orders() {
               <div key={order.id} className="bg-white rounded-lg shadow-md p-6">
                 <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between mb-4">
                   <div className="mb-4 sm:mb-0">
-                    <h3 className="text-xl font-semibold text-gray-900">
-                      Order #{order.order_number}
-                    </h3>
+                    <div className="flex items-center space-x-3 mb-1">
+                      <h3 className="text-xl font-semibold text-gray-900">
+                        Order #{order.order_number}
+                      </h3>
+                      <span className={`inline-flex items-center px-3 py-1 rounded-full text-sm font-medium ${getStatusColor(order.status)}`}>
+                        {getStatusIcon(order.status)}
+                        <span className="ml-2 capitalize">{order.status}</span>
+                      </span>
+                    </div>
                     <p className="text-sm text-gray-600">
                       Placed on {new Date(order.created_at).toLocaleDateString('en-US', {
                         weekday: 'long',
@@ -145,13 +174,26 @@ export default function Orders() {
                     </p>
                   </div>
                   <div className="flex items-center space-x-4">
-                    <span className={`inline-flex items-center px-3 py-1 rounded-full text-sm font-medium ${getStatusColor(order.status)}`}>
-                      {getStatusIcon(order.status)}
-                      <span className="ml-2 capitalize">{order.status}</span>
-                    </span>
                     <div className="text-right">
                       <p className="text-xl font-bold text-purple-600">${order.total_amount}</p>
                       <p className="text-sm text-gray-500">{getTotalImages(order)} images</p>
+                    </div>
+                    
+                    {/* Action Buttons */}
+                    <div className="flex flex-col sm:flex-row gap-2">
+                      <button
+                        onClick={() => openOrderModal(order)}
+                        className="flex items-center justify-center px-3 py-2 bg-purple-600 text-white rounded-lg hover:bg-purple-700 transition text-sm"
+                      >
+                        <Eye className="h-4 w-4 mr-1" />
+                        View Details
+                      </button>
+                      {order.status === 'completed' && (
+                        <button className="flex items-center justify-center px-3 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 transition text-sm">
+                          <Download className="h-4 w-4 mr-1" />
+                          Download
+                        </button>
+                      )}
                     </div>
                   </div>
                 </div>
@@ -186,22 +228,6 @@ export default function Orders() {
                   </div>
                 </div>
 
-                {/* Action Buttons */}
-                <div className="flex flex-col sm:flex-row gap-3">
-                  <button
-                    onClick={() => openOrderModal(order)}
-                    className="flex items-center justify-center px-4 py-2 bg-purple-600 text-white rounded-lg hover:bg-purple-700 transition"
-                  >
-                    <Eye className="h-4 w-4 mr-2" />
-                    View Details
-                  </button>
-                  {order.status === 'completed' && (
-                    <button className="flex items-center justify-center px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 transition">
-                      <Download className="h-4 w-4 mr-2" />
-                      Download Files
-                    </button>
-                  )}
-                </div>
               </div>
             ))}
           </div>
@@ -278,11 +304,23 @@ export default function Orders() {
                           <div className="grid grid-cols-2 sm:grid-cols-4 md:grid-cols-6 gap-2">
                             {item.specifications.photos.map((photo, index) => (
                               <div key={index} className="relative">
-                                <img
-                                  src={photo.url}
-                                  alt={photo.filename}
-                                  className="w-full h-16 object-cover rounded border"
-                                />
+                                {photo.url ? (
+                                  <img
+                                    src={getImageUrl(photo.url)}
+                                    alt={photo.filename || 'Uploaded image'}
+                                    className="w-full h-16 object-cover rounded border"
+                                    onError={(e) => {
+                                      e.target.style.display = 'none'
+                                      e.target.nextSibling.style.display = 'flex'
+                                    }}
+                                  />
+                                ) : null}
+                                <div className="w-full h-16 hidden items-center justify-center bg-gray-100 rounded border">
+                                  <div className="text-center">
+                                    <Image className="h-4 w-4 text-gray-400 mx-auto mb-1" />
+                                    <p className="text-xs text-gray-500">No image</p>
+                                  </div>
+                                </div>
                               </div>
                             ))}
                           </div>

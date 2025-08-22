@@ -28,19 +28,32 @@ export default function Cart() {
   }
 
   const fetchCartItems = async () => {
+    console.log('🛒 Fetching cart items for user:', user?.id)
     setLoading(true)
-    const { data, error } = await supabase
-      .from('cart_items')
-      .select(`
-        *,
-        service:services(*)
-      `)
-      .eq('user_id', user.id)
+    
+    try {
+      const { data, error } = await supabase
+        .from('cart_items')
+        .select(`
+          *,
+          service:services(*)
+        `)
+        .eq('user_id', user.id)
 
-    if (!error && data) {
-      setCartItems(data)
+      if (error) {
+        console.error('❌ Error fetching cart items:', error)
+        setCartItems([])
+      } else {
+        console.log('✅ Cart items fetched successfully:', data.length, 'items')
+        console.log('📋 Cart items data:', data)
+        setCartItems(data || [])
+      }
+    } catch (err) {
+      console.error('❌ Cart fetch error:', err)
+      setCartItems([])
+    } finally {
+      setLoading(false)
     }
-    setLoading(false)
   }
 
 
@@ -170,9 +183,10 @@ export default function Cart() {
                           {item.service?.description}
                         </p>
                         
-                        {/* Display each uploaded photo as separate line item */}
+                        {/* Display photo for this individual cart item */}
                         {item.specifications?.photos && item.specifications.photos.length > 0 ? (
                           <div className="space-y-3">
+                            {/* Since each cart item now has only one photo */}
                             {item.specifications.photos.map((photo, index) => (
                               <div key={index} className="flex items-center justify-between p-3 bg-gray-50 rounded-lg">
                                 <div className="flex items-center space-x-3">
@@ -180,12 +194,20 @@ export default function Cart() {
                                     src={photo.url}
                                     alt={photo.filename}
                                     className="w-12 h-12 object-cover rounded-lg border border-gray-200"
+                                    onError={(e) => {
+                                      console.log('🖼️ Image load error for:', photo.filename, photo.url)
+                                      e.target.style.display = 'none'
+                                      e.target.nextSibling.style.display = 'flex'
+                                    }}
                                   />
+                                  <div className="w-12 h-12 hidden items-center justify-center bg-gray-100 rounded-lg border border-gray-200">
+                                    <span className="text-xs text-gray-500">IMG</span>
+                                  </div>
                                   <div className="flex-1 min-w-0">
                                     <p className="text-sm font-medium text-gray-800 truncate" title={photo.filename}>
                                       {photo.filename}
                                     </p>
-                                    <p className="text-xs text-gray-500">${item.service?.base_price} per image</p>
+                                    <p className="text-xs text-gray-500">Individual photo editing</p>
                                   </div>
                                 </div>
                                 <div className="text-right">
@@ -196,10 +218,10 @@ export default function Cart() {
                               </div>
                             ))}
                             
-                            {/* Display special instructions */}
+                            {/* Display special instructions for this specific photo */}
                             {item.specifications?.notes && (
                               <div className="p-3 bg-blue-50 border border-blue-200 rounded-lg">
-                                <p className="text-sm font-medium text-blue-800 mb-1">Special Instructions:</p>
+                                <p className="text-sm font-medium text-blue-800 mb-1">Instructions for this photo:</p>
                                 <p className="text-sm text-blue-700">{item.specifications.notes}</p>
                               </div>
                             )}
@@ -210,7 +232,7 @@ export default function Cart() {
                                 className="text-red-500 hover:text-red-700 transition flex items-center text-sm"
                               >
                                 <Trash2 className="h-4 w-4 mr-1" />
-                                Remove All Photos
+                                Remove This Photo
                               </button>
                             </div>
                           </div>

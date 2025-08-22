@@ -15,7 +15,11 @@
       "Bash(npm run build:*)",
       "Bash(rm:*)",
       "Bash(npm uninstall:*)",
-      "Bash(git add:*)"
+      "Bash(git add:*)",
+      "Bash(git push:*)",
+      "Bash(cat:*)",
+      "Bash(taskkill:*)",
+      "Bash(del:*)"
     ],
     "deny": [],
     "ask": []

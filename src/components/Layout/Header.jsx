@@ -1,50 +1,27 @@
 import { Link, useNavigate } from 'react-router-dom'
-import { ShoppingCart, User, Image, Menu, X } from 'lucide-react'
+import { ShoppingCart, User, Image, Menu, X, Package } from 'lucide-react'
 import { useState, useEffect, useRef } from 'react'
 import { supabase } from '../../lib/supabase'
+import { useAuth } from '../../contexts/AuthContext'
 
 export default function Header() {
   const [isMenuOpen, setIsMenuOpen] = useState(false)
   const [isProfileDropdownOpen, setIsProfileDropdownOpen] = useState(false)
-  const [user, setUser] = useState(null)
-  const [userProfile, setUserProfile] = useState(null)
   const [cartCount, setCartCount] = useState(0)
+  const [ordersCount, setOrdersCount] = useState(0)
   const navigate = useNavigate()
   const profileDropdownRef = useRef(null)
-
-  useEffect(() => {
-    supabase.auth.getSession().then(({ data: { session } }) => {
-      setUser(session?.user ?? null)
-    })
-
-    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
-      setUser(session?.user ?? null)
-    })
-
-    return () => subscription.unsubscribe()
-  }, [])
+  const { user, profile, signOut, isAuthenticated, isAdmin, isEditor } = useAuth()
 
   useEffect(() => {
     if (user) {
       fetchCartCount()
-      fetchUserProfile()
+      fetchOrdersCount()
     } else {
       setCartCount(0)
-      setUserProfile(null)
+      setOrdersCount(0)
     }
   }, [user])
-
-  const fetchUserProfile = async () => {
-    const { data, error } = await supabase
-      .from('profiles')
-      .select('*')
-      .eq('id', user.id)
-      .single()
-
-    if (!error && data) {
-      setUserProfile(data)
-    }
-  }
 
   // Close profile dropdown when clicking outside
   useEffect(() => {
@@ -72,9 +49,32 @@ export default function Header() {
     }
   }
 
+  const fetchOrdersCount = async () => {
+    if (!user) return
+    
+    const { data, error } = await supabase
+      .from('orders')
+      .select('id')
+      .eq('user_id', user.id)
+      .in('status', ['pending', 'processing', 'assigned', 'in_progress'])
+
+    if (!error && data) {
+      console.log('📦 Active orders found:', data.length)
+      setOrdersCount(data.length)
+    } else if (error) {
+      console.error('❌ Error fetching orders count:', error)
+    }
+  }
+
   const handleSignOut = async () => {
-    await supabase.auth.signOut()
-    navigate('/')
+    try {
+      await signOut()
+      navigate('/')
+    } catch (error) {
+      console.error('Error during sign out:', error)
+      // Force navigation even if signout fails
+      navigate('/')
+    }
   }
 
   return (
@@ -87,37 +87,72 @@ export default function Header() {
           </Link>
 
           <div className="hidden md:flex items-center space-x-8">
-            <Link to="/" className="text-gray-700 hover:text-purple-600 transition">
-              Home
-            </Link>
-            <Link to="/services" className="text-gray-700 hover:text-purple-600 transition">
-              Services
-            </Link>
-            <Link to="/portfolio" className="text-gray-700 hover:text-purple-600 transition">
-              Portfolio
-            </Link>
-            <Link to="/about" className="text-gray-700 hover:text-purple-600 transition">
-              About
-            </Link>
-            <Link to="/contact" className="text-gray-700 hover:text-purple-600 transition">
-              Contact
-            </Link>
-            {userProfile?.role === 'admin' && (
-              <Link to="/admin" className="text-gray-700 hover:text-purple-600 transition">
-                Admin
+            {/* Show customer links for customers and unauthenticated users */}
+            {(!user || profile?.role === 'customer') && (
+              <>
+                <Link to="/" className="text-gray-700 hover:text-purple-600 transition">
+                  Home
+                </Link>
+                <Link to="/services" className="text-gray-700 hover:text-purple-600 transition">
+                  Services
+                </Link>
+                <Link to="/portfolio" className="text-gray-700 hover:text-purple-600 transition">
+                  Portfolio
+                </Link>
+                <Link to="/about" className="text-gray-700 hover:text-purple-600 transition">
+                  About
+                </Link>
+                <Link to="/contact" className="text-gray-700 hover:text-purple-600 transition">
+                  Contact
+                </Link>
+              </>
+            )}
+            
+            {/* Show role-specific navigation */}
+            {isEditor && (
+              <Link to="/editor" className="text-gray-700 hover:text-purple-600 transition">
+                Editor Dashboard
               </Link>
+            )}
+            {(isAdmin || profile?.role === 'staff') && (
+              <>
+                <Link to="/admin" className="text-gray-700 hover:text-purple-600 transition">
+                  Admin
+                </Link>
+                <Link to="/admin/orders" className="text-gray-700 hover:text-purple-600 transition">
+                  Orders
+                </Link>
+                <Link to="/admin/users" className="text-gray-700 hover:text-purple-600 transition">
+                  Users
+                </Link>
+              </>
             )}
           </div>
 
           <div className="flex items-center space-x-4">
-            <Link to="/cart" className="relative">
-              <ShoppingCart className="h-6 w-6 text-gray-700 hover:text-purple-600 transition" />
-              {cartCount > 0 && (
-                <span className="absolute -top-2 -right-2 bg-purple-600 text-white text-xs rounded-full h-5 w-5 flex items-center justify-center">
-                  {cartCount}
-                </span>
-              )}
-            </Link>
+            {/* Show orders and shopping cart only for customers */}
+            {(!user || profile?.role === 'customer') && (
+              <>
+                {user && (
+                  <Link to="/orders" className="relative" title="My Orders">
+                    <Package className="h-6 w-6 text-gray-700 hover:text-purple-600 transition" />
+                    {ordersCount > 0 && (
+                      <span className="absolute -top-2 -right-2 bg-blue-600 text-white text-xs rounded-full h-5 w-5 flex items-center justify-center">
+                        {ordersCount > 99 ? '99+' : ordersCount}
+                      </span>
+                    )}
+                  </Link>
+                )}
+                <Link to="/cart" className="relative" title="Shopping Cart">
+                  <ShoppingCart className="h-6 w-6 text-gray-700 hover:text-purple-600 transition" />
+                  {cartCount > 0 && (
+                    <span className="absolute -top-2 -right-2 bg-purple-600 text-white text-xs rounded-full h-5 w-5 flex items-center justify-center">
+                      {cartCount}
+                    </span>
+                  )}
+                </Link>
+              </>
+            )}
 
             {user ? (
               <div className="relative" ref={profileDropdownRef}>
@@ -139,7 +174,7 @@ export default function Header() {
                     <div className="px-4 py-3 border-b border-gray-200">
                       <p className="text-sm font-medium text-gray-900">{user.email}</p>
                       <p className="text-xs text-gray-500 capitalize">
-                        {userProfile?.role || 'Customer'} Account
+                        {profile?.role || 'Customer'} Account
                       </p>
                     </div>
                     <div className="py-1">
@@ -150,14 +185,29 @@ export default function Header() {
                       >
                         Profile Settings
                       </Link>
-                      <Link
-                        to="/orders"
-                        className="block px-4 py-2 text-sm text-gray-700 hover:bg-purple-50"
-                        onClick={() => setIsProfileDropdownOpen(false)}
-                      >
-                        My Orders
-                      </Link>
-                      {userProfile?.role === 'admin' && (
+                      {/* Hide My Orders for editors, show only for customers and admins */}
+                      {!isEditor && (
+                        <Link
+                          to="/orders"
+                          className="block px-4 py-2 text-sm text-gray-700 hover:bg-purple-50"
+                          onClick={() => setIsProfileDropdownOpen(false)}
+                        >
+                          My Orders
+                        </Link>
+                      )}
+                      {isEditor && (
+                        <>
+                          <div className="border-t border-gray-200 my-1"></div>
+                          <Link
+                            to="/editor"
+                            className="block px-4 py-2 text-sm text-gray-700 hover:bg-purple-50 font-medium"
+                            onClick={() => setIsProfileDropdownOpen(false)}
+                          >
+                            Editor Dashboard
+                          </Link>
+                        </>
+                      )}
+                      {isAdmin && (
                         <>
                           <div className="border-t border-gray-200 my-1"></div>
                           <Link
@@ -167,6 +217,22 @@ export default function Header() {
                           >
                             Admin Dashboard
                           </Link>
+                          <Link
+                            to="/admin/orders"
+                            className="block px-4 py-2 text-sm text-gray-700 hover:bg-purple-50"
+                            onClick={() => setIsProfileDropdownOpen(false)}
+                          >
+                            Order Management
+                          </Link>
+                          {isAdmin && (
+                            <Link
+                              to="/admin/users"
+                              className="block px-4 py-2 text-sm text-gray-700 hover:bg-purple-50"
+                              onClick={() => setIsProfileDropdownOpen(false)}
+                            >
+                              User Management
+                            </Link>
+                          )}
                         </>
                       )}
                       <div className="border-t border-gray-200 my-1"></div>
@@ -207,49 +273,81 @@ export default function Header() {
 
         {isMenuOpen && (
           <div className="md:hidden mt-4 space-y-2">
-            <Link
-              to="/"
-              className="block py-2 text-gray-700 hover:text-purple-600 transition"
-              onClick={() => setIsMenuOpen(false)}
-            >
-              Home
-            </Link>
-            <Link
-              to="/services"
-              className="block py-2 text-gray-700 hover:text-purple-600 transition"
-              onClick={() => setIsMenuOpen(false)}
-            >
-              Services
-            </Link>
-            <Link
-              to="/portfolio"
-              className="block py-2 text-gray-700 hover:text-purple-600 transition"
-              onClick={() => setIsMenuOpen(false)}
-            >
-              Portfolio
-            </Link>
-            <Link
-              to="/about"
-              className="block py-2 text-gray-700 hover:text-purple-600 transition"
-              onClick={() => setIsMenuOpen(false)}
-            >
-              About
-            </Link>
-            <Link
-              to="/contact"
-              className="block py-2 text-gray-700 hover:text-purple-600 transition"
-              onClick={() => setIsMenuOpen(false)}
-            >
-              Contact
-            </Link>
-            {userProfile?.role === 'admin' && (
+            {/* Show customer links for customers and unauthenticated users */}
+            {(!user || profile?.role === 'customer') && (
+              <>
+                <Link
+                  to="/"
+                  className="block py-2 text-gray-700 hover:text-purple-600 transition"
+                  onClick={() => setIsMenuOpen(false)}
+                >
+                  Home
+                </Link>
+                <Link
+                  to="/services"
+                  className="block py-2 text-gray-700 hover:text-purple-600 transition"
+                  onClick={() => setIsMenuOpen(false)}
+                >
+                  Services
+                </Link>
+                <Link
+                  to="/portfolio"
+                  className="block py-2 text-gray-700 hover:text-purple-600 transition"
+                  onClick={() => setIsMenuOpen(false)}
+                >
+                  Portfolio
+                </Link>
+                <Link
+                  to="/about"
+                  className="block py-2 text-gray-700 hover:text-purple-600 transition"
+                  onClick={() => setIsMenuOpen(false)}
+                >
+                  About
+                </Link>
+                <Link
+                  to="/contact"
+                  className="block py-2 text-gray-700 hover:text-purple-600 transition"
+                  onClick={() => setIsMenuOpen(false)}
+                >
+                  Contact
+                </Link>
+              </>
+            )}
+            
+            {/* Show role-specific navigation */}
+            {isEditor && (
               <Link
-                to="/admin"
+                to="/editor"
                 className="block py-2 text-gray-700 hover:text-purple-600 transition"
                 onClick={() => setIsMenuOpen(false)}
               >
-                Admin
+                Editor Dashboard
               </Link>
+            )}
+            {(isAdmin || profile?.role === 'staff') && (
+              <>
+                <Link
+                  to="/admin"
+                  className="block py-2 text-gray-700 hover:text-purple-600 transition"
+                  onClick={() => setIsMenuOpen(false)}
+                >
+                  Admin
+                </Link>
+                <Link
+                  to="/admin/orders"
+                  className="block py-2 text-gray-700 hover:text-purple-600 transition"
+                  onClick={() => setIsMenuOpen(false)}
+                >
+                  Orders
+                </Link>
+                <Link
+                  to="/admin/users"
+                  className="block py-2 text-gray-700 hover:text-purple-600 transition"
+                  onClick={() => setIsMenuOpen(false)}
+                >
+                  Users
+                </Link>
+              </>
             )}
           </div>
         )}

@@ -1,12 +1,13 @@
 import { useState } from 'react'
 import { X, ShoppingCart, AlertCircle } from 'lucide-react'
+import { useNavigate } from 'react-router-dom'
 import PhotoUpload from './PhotoUpload'
 import { supabase } from '../lib/supabase'
 
 export default function ServiceOrderModal({ service, isOpen, onClose, user, onAddToCart }) {
+  const navigate = useNavigate()
   const [uploadedPhotos, setUploadedPhotos] = useState([])
-  const [quantity, setQuantity] = useState(1)
-  const [specifications, setSpecifications] = useState('')
+  const [photoInstructions, setPhotoInstructions] = useState({})
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
 
@@ -14,7 +15,22 @@ export default function ServiceOrderModal({ service, isOpen, onClose, user, onAd
 
   const handleUploadComplete = (files) => {
     setUploadedPhotos(files)
+    // Initialize instructions for new photos
+    const newInstructions = {}
+    files.forEach(file => {
+      if (!photoInstructions[file.id]) {
+        newInstructions[file.id] = ''
+      }
+    })
+    setPhotoInstructions(prev => ({ ...prev, ...newInstructions }))
     setError('')
+  }
+
+  const updatePhotoInstructions = (photoId, instructions) => {
+    setPhotoInstructions(prev => ({
+      ...prev,
+      [photoId]: instructions
+    }))
   }
 
   const handleAddToCart = async () => {
@@ -32,31 +48,44 @@ export default function ServiceOrderModal({ service, isOpen, onClose, user, onAd
     setError('')
 
     try {
-      // Add item to cart
-      const { data: cartItem, error: cartError } = await supabase
-        .from('cart_items')
-        .insert({
-          user_id: user.id,
-          service_id: service.id,
-          quantity: uploadedPhotos.length, // One service per photo
-          specifications: {
-            photos: uploadedPhotos.map(photo => ({
-              url: photo.url,
-              path: photo.path,
-              filename: photo.file.name
-            })),
-            notes: specifications
-          }
-        })
-        .select()
-        .single()
+      const createdCartItems = []
+      
+      // Create separate cart item for each photo
+      for (const photo of uploadedPhotos) {
+        const instructions = photoInstructions[photo.id] || ''
+        
+        // Create individual cart item for this photo
+        const { data: cartItem, error: cartError } = await supabase
+          .from('cart_items')
+          .insert({
+            user_id: user.id,
+            service_id: service.id,
+            quantity: 1, // Always 1 per photo
+            specifications: {
+              photos: [{
+                url: photo.url,
+                path: photo.path,
+                filename: photo.file.name,
+                fileSize: photo.file.size
+              }],
+              notes: instructions,
+              photoName: photo.file.name
+            }
+          })
+          .select()
+          .single()
 
-      if (cartError) throw cartError
+        if (cartError) {
+          console.error('Error creating cart item for photo:', photo.file.name, cartError)
+          throw cartError
+        }
 
-      // Save uploaded images to the database
-      if (cartItem) {
-        const imagePromises = uploadedPhotos.map(photo => 
-          supabase.from('uploaded_images').insert({
+        createdCartItems.push(cartItem)
+
+        // Save uploaded image to database
+        const { error: imageError } = await supabase
+          .from('uploaded_images')
+          .insert({
             cart_item_id: cartItem.id,
             original_url: photo.url,
             file_name: photo.file.name,
@@ -64,27 +93,30 @@ export default function ServiceOrderModal({ service, isOpen, onClose, user, onAd
             mime_type: photo.file.type,
             upload_status: 'completed'
           })
-        )
 
-        await Promise.all(imagePromises)
+        if (imageError) {
+          console.error('Error saving image for photo:', photo.file.name, imageError)
+          // Continue with other photos even if one image save fails
+        }
       }
 
-      // Notify parent component
+      // Notify parent component with all created items
       if (onAddToCart) {
-        onAddToCart(cartItem)
+        createdCartItems.forEach(item => onAddToCart(item))
       }
 
       // Reset form
       setUploadedPhotos([])
-      setQuantity(1)
-      setSpecifications('')
+      setPhotoInstructions({})
       
       // Show success and close modal
-      alert(`${uploadedPhotos.length} photo${uploadedPhotos.length !== 1 ? 's' : ''} added to cart for ${service.name}!`)
+      alert(`${uploadedPhotos.length} photo${uploadedPhotos.length !== 1 ? 's' : ''} added to cart as separate items for ${service.name}!`)
       onClose()
       
-      // Redirect to cart page
-      window.location.href = '/cart'
+      // Redirect to cart page with a small delay to ensure data is saved
+      setTimeout(() => {
+        navigate('/cart')
+      }, 500)
 
     } catch (err) {
       console.error('Error adding to cart:', err)
@@ -150,19 +182,64 @@ export default function ServiceOrderModal({ service, isOpen, onClose, user, onAd
             />
           </div>
 
-          {/* Specifications */}
+          {/* Individual Photo Instructions */}
           {uploadedPhotos.length > 0 && (
             <div className="mb-6">
-              <label className="block text-sm font-medium text-gray-700 mb-2">
-                Special Instructions (Optional)
-              </label>
-              <textarea
-                value={specifications}
-                onChange={(e) => setSpecifications(e.target.value)}
-                rows="3"
-                className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-purple-600"
-                placeholder="Any specific requirements or notes for the editor..."
-              />
+              <h3 className="text-lg font-medium text-gray-900 mb-4">
+                Photo Instructions
+              </h3>
+              <p className="text-sm text-gray-600 mb-4">
+                Add specific instructions for each photo. Each photo will be treated as a separate order item.
+              </p>
+              
+              <div className="space-y-4">
+                {uploadedPhotos.map((photo, index) => (
+                  <div key={photo.id} className="bg-gray-50 rounded-lg p-4">
+                    <div className="flex items-start space-x-4">
+                      {/* Photo Thumbnail */}
+                      <div className="flex-shrink-0">
+                        <img
+                          src={photo.preview}
+                          alt={photo.file.name}
+                          className="w-16 h-16 object-cover rounded-lg border border-gray-200"
+                        />
+                      </div>
+                      
+                      {/* Photo Details and Instructions */}
+                      <div className="flex-1">
+                        <div className="mb-2">
+                          <h4 className="text-sm font-medium text-gray-900 truncate">
+                            {photo.file.name}
+                          </h4>
+                          <p className="text-xs text-gray-500">
+                            {(photo.file.size / 1024 / 1024).toFixed(1)} MB • ${service.base_price} per photo
+                          </p>
+                        </div>
+                        
+                        <div>
+                          <label className="block text-xs font-medium text-gray-700 mb-1">
+                            Special Instructions for this photo (Optional)
+                          </label>
+                          <textarea
+                            value={photoInstructions[photo.id] || ''}
+                            onChange={(e) => updatePhotoInstructions(photo.id, e.target.value)}
+                            rows="2"
+                            className="w-full px-3 py-2 text-sm border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-purple-600"
+                            placeholder={`Specific editing requirements for ${photo.file.name}...`}
+                          />
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                ))}
+              </div>
+              
+              <div className="mt-4 p-3 bg-blue-50 border border-blue-200 rounded-lg">
+                <p className="text-sm text-blue-800">
+                  <strong>Note:</strong> Each photo will be added as a separate cart item with its own instructions. 
+                  This allows for individual pricing and tracking in your orders.
+                </p>
+              </div>
             </div>
           )}
 
@@ -177,15 +254,25 @@ export default function ServiceOrderModal({ service, isOpen, onClose, user, onAd
           {/* Pricing Summary */}
           {uploadedPhotos.length > 0 && (
             <div className="mb-6 p-4 bg-purple-50 border border-purple-200 rounded-lg">
-              <div className="flex justify-between items-center">
-                <div>
-                  <p className="text-sm text-purple-700">
-                    {uploadedPhotos.length} photo{uploadedPhotos.length !== 1 ? 's' : ''} × ${service.base_price} each
-                  </p>
+              <div className="space-y-2">
+                <div className="flex justify-between items-center">
+                  <div>
+                    <p className="text-sm text-purple-700">
+                      {uploadedPhotos.length} separate cart item{uploadedPhotos.length !== 1 ? 's' : ''} will be created
+                    </p>
+                    <p className="text-xs text-purple-600">
+                      ${service.base_price} per photo × {uploadedPhotos.length} photo{uploadedPhotos.length !== 1 ? 's' : ''}
+                    </p>
+                  </div>
+                  <div className="text-right">
+                    <p className="text-2xl font-bold text-purple-800">
+                      Total: ${totalPrice.toFixed(2)}
+                    </p>
+                  </div>
                 </div>
-                <div className="text-right">
-                  <p className="text-2xl font-bold text-purple-800">
-                    Total: ${totalPrice.toFixed(2)}
+                <div className="pt-2 border-t border-purple-200">
+                  <p className="text-xs text-purple-600">
+                    Each photo can be edited independently with its own instructions and timeline.
                   </p>
                 </div>
               </div>
@@ -206,7 +293,7 @@ export default function ServiceOrderModal({ service, isOpen, onClose, user, onAd
               className="bg-purple-600 text-white px-6 py-2 rounded-lg hover:bg-purple-700 transition disabled:opacity-50 disabled:cursor-not-allowed flex items-center"
             >
               <ShoppingCart className="h-5 w-5 mr-2" />
-              {loading ? 'Adding...' : `Add ${uploadedPhotos.length || 0} Photo${uploadedPhotos.length !== 1 ? 's' : ''} to Cart`}
+              {loading ? 'Adding...' : `Add ${uploadedPhotos.length || 0} Item${uploadedPhotos.length !== 1 ? 's' : ''} to Cart`}
             </button>
           </div>
         </div>

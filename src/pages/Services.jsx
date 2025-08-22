@@ -33,6 +33,8 @@ export default function Services() {
 
   const fetchServices = async () => {
     setLoading(true)
+    console.log('🔄 Fetching services for category:', selectedCategory)
+    
     let query = supabase.from('services').select('*').eq('is_active', true)
     
     if (selectedCategory !== 'all') {
@@ -42,9 +44,11 @@ export default function Services() {
     const { data, error } = await query
 
     if (!error && data) {
+      console.log('✅ Services fetched successfully:', data.length, 'services')
+      console.log('📋 Services data:', data)
       setServices(data)
     } else {
-      console.error('Error fetching services:', error)
+      console.error('❌ Error fetching services:', error)
       setServices([])
     }
     setLoading(false)
@@ -52,10 +56,13 @@ export default function Services() {
 
 
   const handleServiceSelect = (service) => {
+    console.log('🎯 Service selected:', service.name)
     if (!user) {
+      console.log('❌ User not logged in, redirecting to login')
       navigate('/login')
       return
     }
+    console.log('✅ Opening service modal for:', service.name)
     setSelectedService(service)
     setIsModalOpen(true)
   }
@@ -66,8 +73,9 @@ export default function Services() {
   }
 
   const handleAddToCart = (cartItem) => {
-    // Refresh the page to update cart count
-    window.location.reload()
+    // Don't reload the page - let the modal handle navigation
+    console.log('✅ Cart item added:', cartItem)
+    // The ServiceOrderModal will handle the redirect to /cart
   }
 
   return (

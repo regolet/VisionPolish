@@ -15,34 +15,57 @@ export default function Checkout() {
   const [user, setUser] = useState(null)
 
   useEffect(() => {
+    console.log('🚀 Checkout component mounted, checking user...')
     checkUser()
   }, [])
 
   useEffect(() => {
+    console.log('🔄 User/Order effect triggered:', { 
+      hasUser: !!user, 
+      userEmail: user?.email, 
+      orderId 
+    })
     if (user && orderId) {
+      console.log('✅ Both user and orderId present, fetching order details')
       fetchOrderDetails()
+    } else {
+      console.log('⏳ Waiting for user or orderId...', { user: !!user, orderId })
     }
   }, [user, orderId])
 
   const checkUser = async () => {
+    console.log('🔐 Checking user authentication...')
     const { data: { session } } = await supabase.auth.getSession()
+    console.log('📋 Session data:', session?.user?.email)
     setUser(session?.user ?? null)
     if (!session) {
+      console.log('❌ No session found, redirecting to login')
       navigate('/login')
+    } else {
+      console.log('✅ User authenticated:', session.user.email)
     }
   }
 
   const fetchOrderDetails = async () => {
+    console.log('🛒 Fetching order details for order ID:', orderId)
+    console.log('👤 User ID:', user?.id)
     setLoading(true)
     
-    const { data: orderData, error: orderError } = await supabase
-      .from('orders')
-      .select('*')
-      .eq('id', orderId)
-      .eq('user_id', user.id)
-      .single()
+    try {
+      const { data: orderData, error: orderError } = await supabase
+        .from('orders')
+        .select('*')
+        .eq('id', orderId)
+        .eq('user_id', user.id)
+        .single()
 
-    if (!orderError && orderData) {
+      if (orderError) {
+        console.error('❌ Error fetching order:', orderError)
+        setLoading(false)
+        return
+      }
+
+      console.log('✅ Order data fetched:', orderData)
       setOrder(orderData)
 
       const { data: itemsData, error: itemsError } = await supabase
@@ -53,12 +76,18 @@ export default function Checkout() {
         `)
         .eq('order_id', orderId)
 
-      if (!itemsError && itemsData) {
-        setOrderItems(itemsData)
+      if (itemsError) {
+        console.error('❌ Error fetching order items:', itemsError)
+      } else {
+        console.log('✅ Order items fetched:', itemsData?.length, 'items')
+        console.log('📋 Order items data:', itemsData)
+        setOrderItems(itemsData || [])
       }
+    } catch (error) {
+      console.error('❌ Checkout fetch error:', error)
+    } finally {
+      setLoading(false)
     }
-    
-    setLoading(false)
   }
 
   const handleFileUpload = (itemId, files) => {
@@ -180,34 +209,53 @@ export default function Checkout() {
                   </h3>
                   <p className="text-gray-600 mb-4">{item.service?.description}</p>
                   
-                  {/* Display uploaded photos */}
+                  {/* Display uploaded photos with instructions on the right */}
                   {item.specifications?.photos && item.specifications.photos.length > 0 && (
                     <div className="mb-4">
                       <p className="text-sm font-medium text-gray-700 mb-3">
                         Photos to be edited ({item.specifications.photos.length}):
                       </p>
-                      <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-3">
-                        {item.specifications.photos.map((photo, index) => (
-                          <div key={index} className="relative">
-                            <img
-                              src={photo.url}
-                              alt={photo.filename}
-                              className="w-full h-24 object-cover rounded-lg border border-gray-200"
-                            />
-                            <div className="absolute inset-0 bg-green-500 bg-opacity-20 rounded-lg flex items-center justify-center">
-                              <Check className="h-6 w-6 text-green-600" />
-                            </div>
+                      
+                      <div className="flex flex-col lg:flex-row gap-3">
+                        {/* Photos on the left */}
+                        <div className="flex-1">
+                          <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-3">
+                            {item.specifications.photos.map((photo, index) => (
+                              <div key={index} className="relative">
+                                <img
+                                  src={photo.url}
+                                  alt={photo.filename}
+                                  className="w-full h-24 object-cover rounded-lg border border-gray-200"
+                                />
+                                <div className="absolute inset-0 bg-green-500 bg-opacity-20 rounded-lg flex items-center justify-center">
+                                  <Check className="h-6 w-6 text-green-600" />
+                                </div>
+                              </div>
+                            ))}
                           </div>
-                        ))}
+                        </div>
+                        
+                        {/* Special instructions on the right */}
+                        <div className="lg:w-80 flex-shrink-0">
+                          {item.specifications?.notes ? (
+                            <div className="p-4 bg-blue-50 border border-blue-200 rounded-lg h-fit">
+                              <p className="text-sm font-medium text-blue-800 mb-2 flex items-center">
+                                <Image className="h-4 w-4 mr-2" />
+                                Special Instructions:
+                              </p>
+                              <p className="text-sm text-blue-700 leading-relaxed">{item.specifications.notes}</p>
+                            </div>
+                          ) : (
+                            <div className="p-4 bg-gray-50 border border-gray-200 rounded-lg h-fit">
+                              <p className="text-sm font-medium text-gray-600 mb-2 flex items-center">
+                                <Image className="h-4 w-4 mr-2" />
+                                Instructions:
+                              </p>
+                              <p className="text-sm text-gray-500 italic">No special instructions provided for this photo.</p>
+                            </div>
+                          )}
+                        </div>
                       </div>
-                    </div>
-                  )}
-                  
-                  {/* Display special instructions */}
-                  {item.specifications?.notes && (
-                    <div className="p-3 bg-blue-50 border border-blue-200 rounded-lg">
-                      <p className="text-sm font-medium text-blue-800 mb-1">Special Instructions:</p>
-                      <p className="text-sm text-blue-700">{item.specifications.notes}</p>
                     </div>
                   )}
                   

@@ -47,7 +47,56 @@ export default function Login() {
         })
 
         if (error) throw error
-        navigate('/')
+        
+        // Wait for AuthContext to handle the session and role
+        // The AuthContext will automatically redirect based on role
+        setTimeout(() => {
+          // Get the current user session and role after AuthContext has processed it
+          const checkRoleAndRedirect = async () => {
+            const { data: { session } } = await supabase.auth.getSession()
+            
+            if (session?.user) {
+              // Use hardcoded logic for editor@editor.com
+              if (session.user.email === 'editor@editor.com') {
+                navigate('/editor')
+                return
+              }
+              
+              // For other users, check their profile
+              try {
+                const { data: profile } = await supabase
+                  .from('profiles')
+                  .select('role')
+                  .eq('id', session.user.id)
+                  .single()
+                
+                // Role-based redirect
+                switch (profile?.role) {
+                  case 'admin':
+                    navigate('/admin')
+                    break
+                  case 'editor':
+                    navigate('/editor')
+                    break
+                  case 'staff':
+                    navigate('/admin/orders')
+                    break
+                  case 'customer':
+                  default:
+                    navigate('/')
+                    break
+                }
+              } catch (error) {
+                console.error('Error checking profile:', error)
+                navigate('/')
+              }
+            } else {
+              navigate('/')
+            }
+          }
+          
+          checkRoleAndRedirect()
+        }, 100) // Small delay to let AuthContext process the session
       }
     } catch (error) {
       setError(error.message)
