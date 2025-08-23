@@ -3,8 +3,10 @@ import { X, ShoppingCart, AlertCircle } from 'lucide-react'
 import { useNavigate } from 'react-router-dom'
 import PhotoUpload from './PhotoUpload'
 import { supabase } from '../lib/supabase'
+import { useNotification } from '../contexts/NotificationContext'
 
 export default function ServiceOrderModal({ service, isOpen, onClose, user, onAddToCart }) {
+  const { showSuccess, showError } = useNotification()
   const navigate = useNavigate()
   const [uploadedPhotos, setUploadedPhotos] = useState([])
   const [photoInstructions, setPhotoInstructions] = useState({})
@@ -110,7 +112,7 @@ export default function ServiceOrderModal({ service, isOpen, onClose, user, onAd
       setPhotoInstructions({})
       
       // Show success and close modal
-      alert(`${uploadedPhotos.length} photo${uploadedPhotos.length !== 1 ? 's' : ''} added to cart as separate items for ${service.name}!`)
+      showSuccess(`${uploadedPhotos.length} photo${uploadedPhotos.length !== 1 ? 's' : ''} added to cart as separate items for ${service.name}!`)
       onClose()
       
       // Redirect to cart page with a small delay to ensure data is saved

@@ -1,5 +1,6 @@
 import { BrowserRouter as Router, Routes, Route } from 'react-router-dom'
 import { AuthProvider } from './contexts/AuthContext'
+import { NotificationProvider } from './contexts/NotificationContext'
 import ErrorBoundary from './components/ErrorBoundary'
 import ProtectedRoute from './components/ProtectedRoute'
 import Layout from './components/Layout/Layout'
@@ -21,8 +22,9 @@ import Unauthorized from './pages/Unauthorized'
 function App() {
   return (
     <ErrorBoundary>
-      <AuthProvider>
-        <Router>
+      <NotificationProvider>
+        <AuthProvider>
+          <Router>
           <Layout>
             <Routes>
               {/* Public Routes */}
@@ -88,8 +90,9 @@ function App() {
               } />
             </Routes>
           </Layout>
-        </Router>
-      </AuthProvider>
+          </Router>
+        </AuthProvider>
+      </NotificationProvider>
     </ErrorBoundary>
   )
 }

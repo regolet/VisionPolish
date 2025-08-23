@@ -1,9 +1,11 @@
 import { useState } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 import { supabase } from '../lib/supabase'
+import { useNotification } from '../contexts/NotificationContext'
 import { Mail, Lock, User, ArrowRight } from 'lucide-react'
 
 export default function Login() {
+  const { showSuccess, showError } = useNotification()
   const [isSignUp, setIsSignUp] = useState(false)
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
@@ -38,7 +40,7 @@ export default function Login() {
           })
         }
 
-        alert('Check your email for the confirmation link!')
+        showSuccess('Check your email for the confirmation link!')
         setIsSignUp(false)
       } else {
         const { error } = await supabase.auth.signInWithPassword({

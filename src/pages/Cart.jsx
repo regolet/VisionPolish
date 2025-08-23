@@ -2,8 +2,10 @@ import { useState, useEffect } from 'react'
 import { Trash2, ShoppingBag, ArrowRight } from 'lucide-react'
 import { supabase } from '../lib/supabase'
 import { Link, useNavigate } from 'react-router-dom'
+import { useNotification } from '../contexts/NotificationContext'
 
 export default function Cart() {
+  const { showSuccess, showError } = useNotification()
   const [cartItems, setCartItems] = useState([])
   const [loading, setLoading] = useState(true)
   const [user, setUser] = useState(null)
@@ -95,7 +97,7 @@ export default function Cart() {
 
       if (orderError) {
         console.error('Order creation error:', orderError)
-        alert('Failed to create order. Please try again.')
+        showError('Failed to create order. Please try again.')
         return
       }
 
@@ -114,7 +116,7 @@ export default function Cart() {
 
         if (itemsError) {
           console.error('Order items error:', itemsError)
-          alert('Failed to create order items. Please try again.')
+          showError('Failed to create order items. Please try again.')
           return
         }
 
@@ -133,7 +135,7 @@ export default function Cart() {
       }
     } catch (error) {
       console.error('Checkout error:', error)
-      alert('Something went wrong. Please try again.')
+      showError('Something went wrong. Please try again.')
     }
   }
 

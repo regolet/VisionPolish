@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react'
 import { useAuth } from '../contexts/AuthContext'
+import { useNotification } from '../contexts/NotificationContext'
 import { supabase } from '../lib/supabase'
 import { 
   Download, 
@@ -11,17 +12,20 @@ import {
   FileText,
   Calendar,
   X,
-  ZoomIn
+  ZoomIn,
+  RefreshCw
 } from 'lucide-react'
 
 export default function EditorDashboard() {
   const { user, profile } = useAuth()
+  const { showSuccess, showError } = useNotification()
   const [orders, setOrders] = useState([])
   const [loading, setLoading] = useState(true)
   const [uploadingImage, setUploadingImage] = useState(null)
   const [selectedFiles, setSelectedFiles] = useState({})
   const [previewImage, setPreviewImage] = useState(null)
   const [imageInfo, setImageInfo] = useState(null)
+  const [activeTab, setActiveTab] = useState('assigned')
 
   useEffect(() => {
     if (user && profile?.role === 'editor') {
@@ -129,15 +133,6 @@ export default function EditorDashboard() {
             services: item.services
           }
         })
-        console.log('🔄 Setting transformed orders:', transformedOrders.length, 'items')
-        
-        // Log edited images for debugging
-        transformedOrders.forEach(order => {
-          if (order.specifications?.editedImages?.length > 0) {
-            console.log(`📸 Order ${order.order_id} has ${order.specifications.editedImages.length} edited images:`, 
-              order.specifications.editedImages.map(img => img.filename))
-          }
-        })
         
         setOrders(transformedOrders)
       }
@@ -148,7 +143,7 @@ export default function EditorDashboard() {
     }
   }
 
-  const getImageUrl = (imagePath) => {
+  const getImageUrl = (imagePath, bucket = 'uploads') => {
     if (!imagePath) {
       return `https://via.placeholder.com/200x200/e5e7eb/6b7280?text=No+Image`
     }
@@ -158,10 +153,7 @@ export default function EditorDashboard() {
       return imagePath
     }
     
-    // Log the path for debugging
-    console.log('Processing image path:', imagePath)
-    
-    // Clean up the path - remove any leading slash or protocol-like prefixes
+    // Clean up the path - remove any leading slash
     let cleanPath = imagePath.trim()
     if (cleanPath.startsWith('/')) {
       cleanPath = cleanPath.substring(1)
@@ -169,21 +161,52 @@ export default function EditorDashboard() {
     
     // If it looks like a malformed URL or test data, create a placeholder
     if (cleanPath.includes('ffffff') || cleanPath.includes('text=Test') || cleanPath.length < 5) {
-      console.log('Using placeholder for malformed path:', cleanPath)
       return `https://via.placeholder.com/200x200/e5e7eb/6b7280?text=Test+Image`
     }
     
-    // Use Supabase Storage to get public URL
+    // Use Supabase Storage to get public URL with correct bucket
     try {
-      console.log('Getting Supabase storage URL for:', cleanPath)
-      const { data } = supabase.storage.from('uploads').getPublicUrl(cleanPath)
-      console.log('Generated URL:', data.publicUrl)
+      const { data } = supabase.storage.from(bucket).getPublicUrl(cleanPath)
       return data.publicUrl
     } catch (error) {
-      console.error('Error generating storage URL:', error)
+      console.error('❌ Error generating storage URL:', error)
       // Return a placeholder if URL generation fails
       return `https://via.placeholder.com/200x200/e5e7eb/6b7280?text=Error+Loading`
     }
+  }
+
+  // Helper function specifically for edited images
+  const getEditedImageUrl = (editedImage) => {
+    // All edited images should be in uploads bucket under edited/ folder
+    if (editedImage.url) {
+      let path = editedImage.url
+      
+      // Ensure the path is in correct format: edited/filename.jpg
+      // Remove any incorrect prefixes
+      if (path.startsWith('uploads/')) {
+        path = path.substring(8) // Remove 'uploads/' prefix
+      }
+      if (path.startsWith('images/')) {
+        path = path.substring(7) // Remove 'images/' prefix
+      }
+      
+      // Ensure path starts with 'edited/' for edited images
+      if (!path.startsWith('edited/')) {
+        path = `edited/${path}`
+      }
+      
+      // Generate URL from uploads bucket
+      const { data } = supabase.storage.from('uploads').getPublicUrl(path)
+      return data.publicUrl
+    }
+    
+    // Fallback to stored publicUrl if available (for legacy images)
+    if (editedImage.publicUrl) {
+      return editedImage.publicUrl
+    }
+    
+    // Last resort placeholder
+    return `https://via.placeholder.com/200x200/e5e7eb/6b7280?text=No+Image`
   }
 
   const downloadOriginalImage = async (imageUrl, fileName) => {
@@ -228,29 +251,29 @@ export default function EditorDashboard() {
         link.click()
         document.body.removeChild(link)
       } catch (fallbackError) {
-        alert('Error downloading image. Please try right-clicking and saving the image.')
+        showError('Error downloading image. Please try right-clicking and saving the image.')
       }
     }
   }
 
   const handleFileSelect = (orderItemId, files) => {
-    setSelectedFiles(prev => ({
-      ...prev,
-      [orderItemId]: files[0]
-    }))
+    if (files && files[0]) {
+      setSelectedFiles(prev => ({
+        ...prev,
+        [orderItemId]: files[0]
+      }))
+    }
   }
 
   const uploadEditedImage = async (orderItemId) => {
     const file = selectedFiles[orderItemId]
     if (!file) {
-      alert('Please select a file to upload')
+      showError('Please select a file to upload')
       return
     }
 
     try {
       setUploadingImage(orderItemId)
-      console.log('🔄 Starting upload for order item:', orderItemId)
-      console.log('📁 File details:', { name: file.name, size: file.size, type: file.type })
 
       // Validate file type
       if (!file.type.startsWith('image/')) {
@@ -262,39 +285,32 @@ export default function EditorDashboard() {
         throw new Error('File size must be less than 10MB')
       }
 
-      // Upload the edited image
+      // Upload the edited image to uploads/edited/ folder
       const fileExt = file.name.split('.').pop()
       const fileName = `edited_${orderItemId}_${Date.now()}.${fileExt}`
       const filePath = `edited/${fileName}`
 
-      console.log('📤 Uploading to path:', filePath)
 
-      // Try uploading to 'uploads' bucket first, then 'images' if that fails
-      let uploadResult
-      try {
-        uploadResult = await supabase.storage
-          .from('uploads')
-          .upload(filePath, file)
-      } catch (uploadsError) {
-        console.log('⚠️ uploads bucket failed, trying images bucket')
-        uploadResult = await supabase.storage
-          .from('images')
-          .upload(filePath, file)
-      }
+      // Upload to uploads bucket in edited/ folder
+      const uploadResult = await supabase.storage
+        .from('uploads')
+        .upload(filePath, file)
+      
+      const bucketUsed = 'uploads'
 
       if (uploadResult.error) {
-        console.error('❌ Upload error:', uploadResult.error)
         throw uploadResult.error
       }
 
-      console.log('✅ Upload successful:', uploadResult.data)
-
-      // Get the public URL for the uploaded image
+      // The uploadResult.data.path should be just the path we uploaded (edited/filename.jpg)
+      // It should NOT include the bucket name prefix
+      let storagePath = uploadResult.data.path || filePath
+      
+      // Get the public URL for the uploaded image using the clean path
       const { data: publicUrlData } = supabase.storage
-        .from(uploadResult.data.path.includes('uploads/') ? 'uploads' : 'images')
-        .getPublicUrl(uploadResult.data.path)
+        .from(bucketUsed)
+        .getPublicUrl(storagePath)
 
-      console.log('📸 Public URL generated:', publicUrlData.publicUrl)
 
       // Update the order item with the edited image information
       const orderItem = orders.find(o => o.id === orderItemId)
@@ -302,39 +318,86 @@ export default function EditorDashboard() {
       
       // Get current specifications and add edited image
       const currentSpecs = orderItem.specifications || { photos: [] }
-      const editedImages = currentSpecs.editedImages || []
+      let editedImages = currentSpecs.editedImages || []
+      const revisionHistory = currentSpecs.revisionHistory || []
       
-      // Add the new edited image
-      editedImages.push({
-        url: uploadResult.data.path,
+      // Create new edited image object
+      const newEditedImage = {
+        url: storagePath, // Store the clean path (edited/filename.jpg)
         publicUrl: publicUrlData.publicUrl,
         filename: fileName,
         originalFilename: file.name,
         size: file.size,
         uploadedAt: new Date().toISOString(),
         uploadedBy: user.id
-      })
+      }
+      
+      // If this is a revision (order status is revision), handle revision images
+      if (orderItem.status === 'revision' && revisionHistory.length > 0) {
+        // Find the latest pending revision
+        const latestRevisionIndex = revisionHistory.findIndex(rev => rev.status === 'pending')
+        if (latestRevisionIndex !== -1) {
+          // Add image to the revision's edited images
+          const updatedRevisionHistory = [...revisionHistory]
+          if (!updatedRevisionHistory[latestRevisionIndex].editedImages) {
+            updatedRevisionHistory[latestRevisionIndex].editedImages = []
+          }
+          updatedRevisionHistory[latestRevisionIndex].editedImages.push(newEditedImage)
+          
+          // Mark revision as completed
+          updatedRevisionHistory[latestRevisionIndex].status = 'completed'
+          updatedRevisionHistory[latestRevisionIndex].completedAt = new Date().toISOString()
+          
+          // Also add to main edited images array (latest version)
+          editedImages.push(newEditedImage)
+          
+          // Update specifications with revision data
+          const updatedSpecs = {
+            ...currentSpecs,
+            editedImages: editedImages,
+            revisionHistory: updatedRevisionHistory,
+            latestRevision: updatedRevisionHistory[latestRevisionIndex]
+          }
+          
+          // Update order item with revision completion
+          const { error: itemUpdateError } = await supabase
+            .from('order_items')
+            .update({
+              specifications: updatedSpecs
+            })
+            .eq('id', orderItemId)
 
-      // Update specifications with edited images
-      const updatedSpecs = {
-        ...currentSpecs,
-        editedImages: editedImages
+          if (itemUpdateError) {
+            throw itemUpdateError
+          }
+          
+          showSuccess('Revision completed successfully!')
+        }
+      } else {
+        // Regular upload (not a revision)
+        editedImages.push(newEditedImage)
+        
+        // Update specifications with edited images
+        const updatedSpecs = {
+          ...currentSpecs,
+          editedImages: editedImages
+        }
+        
+        // Update order item
+        const { error: itemUpdateError } = await supabase
+          .from('order_items')
+          .update({
+            specifications: updatedSpecs
+          })
+          .eq('id', orderItemId)
+
+        if (itemUpdateError) {
+          throw itemUpdateError
+        }
       }
 
-      console.log('🔄 Updating order item with edited image info')
-      const { error: itemUpdateError } = await supabase
-        .from('order_items')
-        .update({
-          specifications: updatedSpecs
-        })
-        .eq('id', orderItemId)
-
-      if (itemUpdateError) {
-        console.error('❌ Order item update error:', itemUpdateError)
-        throw itemUpdateError
-      }
-
-      console.log('🔄 Updating order status to completed')
+      
+      // This block is now handled above based on revision status
       const { error: orderUpdateError } = await supabase
         .from('orders')
         .update({
@@ -344,33 +407,33 @@ export default function EditorDashboard() {
         .eq('id', orderItem.order_id)
 
       if (orderUpdateError) {
-        console.error('❌ Order update error:', orderUpdateError)
         throw orderUpdateError
       }
 
-      console.log('✅ Order and order item updated successfully')
-
-      // Clear the selected file
+      // Clear the selected file and reset file input
       setSelectedFiles(prev => {
         const updated = { ...prev }
         delete updated[orderItemId]
         return updated
       })
+      
+      // Clear the file input field
+      const fileInput = document.getElementById(`file-upload-${orderItemId}`)
+      if (fileInput) {
+        fileInput.value = ''
+      }
 
       // Force a complete refresh of orders data with a brief delay
-      console.log('🔄 Refreshing orders data...')
       setLoading(true) // This will trigger loading state
       
       // Small delay to ensure database has processed the update
       await new Promise(resolve => setTimeout(resolve, 500))
       
       await fetchAssignedOrders()
-      console.log('✅ Orders data refreshed - fetching complete')
       
-      alert('Image uploaded successfully! Order marked as completed.')
+      showSuccess('Image uploaded successfully! Order marked as completed.')
     } catch (error) {
-      console.error('❌ Upload failed:', error)
-      alert(`Error uploading image: ${error.message}`)
+      showError(`Error uploading image: ${error.message}`)
     } finally {
       setUploadingImage(null)
     }
@@ -402,9 +465,23 @@ export default function EditorDashboard() {
 
       if (error) throw error
       await fetchAssignedOrders()
+      showSuccess('Status updated to in progress')
     } catch (error) {
       console.error('Error updating status:', error)
-      alert('Error updating status')
+      showError('Error updating status')
+    }
+  }
+
+  const getFilteredOrders = () => {
+    switch (activeTab) {
+      case 'assigned':
+        return orders.filter(o => ['assigned', 'in_progress'].includes(o.status))
+      case 'completed':
+        return orders.filter(o => o.status === 'completed')
+      case 'revision':
+        return orders.filter(o => o.status === 'revision')
+      default:
+        return orders
     }
   }
 
@@ -439,7 +516,9 @@ export default function EditorDashboard() {
           <div className="flex items-center justify-between">
             <div>
               <p className="text-sm font-medium text-gray-600">Total Assigned</p>
-              <p className="text-2xl font-bold text-gray-900">{orders.length}</p>
+              <p className="text-2xl font-bold text-gray-900">
+                {orders.filter(o => ['assigned', 'in_progress'].includes(o.status)).length}
+              </p>
             </div>
             <FileText className="h-8 w-8 text-purple-600" />
           </div>
@@ -469,133 +548,256 @@ export default function EditorDashboard() {
         <div className="bg-white p-6 rounded-lg shadow-md">
           <div className="flex items-center justify-between">
             <div>
-              <p className="text-sm font-medium text-gray-600">Pending</p>
-              <p className="text-2xl font-bold text-yellow-600">
-                {orders.filter(o => o.status === 'assigned').length}
+              <p className="text-sm font-medium text-gray-600">Revision</p>
+              <p className="text-2xl font-bold text-orange-600">
+                {orders.filter(o => o.status === 'revision').length}
               </p>
             </div>
-            <AlertCircle className="h-8 w-8 text-yellow-600" />
+            <RefreshCw className="h-8 w-8 text-orange-600" />
           </div>
         </div>
       </div>
 
-      {/* Orders List */}
-      <div className="bg-white rounded-lg shadow-md">
-        <div className="px-6 py-4 border-b border-gray-200">
-          <h2 className="text-xl font-semibold text-gray-900">Assigned Orders</h2>
+      {/* Orders List with Tabs */}
+      <div className="bg-white rounded-lg shadow-md overflow-hidden">
+        <div className="border-b border-gray-200">
+          <nav className="flex space-x-8 px-6">
+            <button
+              onClick={() => setActiveTab('assigned')}
+              className={`py-4 px-1 border-b-2 font-medium text-sm transition-colors ${
+                activeTab === 'assigned'
+                  ? 'border-purple-500 text-purple-600'
+                  : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'
+              }`}
+            >
+              Assigned Orders ({orders.filter(o => ['assigned', 'in_progress'].includes(o.status)).length})
+            </button>
+            <button
+              onClick={() => setActiveTab('completed')}
+              className={`py-4 px-1 border-b-2 font-medium text-sm transition-colors ${
+                activeTab === 'completed'
+                  ? 'border-green-500 text-green-600'
+                  : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'
+              }`}
+            >
+              Completed ({orders.filter(o => o.status === 'completed').length})
+            </button>
+            <button
+              onClick={() => setActiveTab('revision')}
+              className={`py-4 px-1 border-b-2 font-medium text-sm transition-colors ${
+                activeTab === 'revision'
+                  ? 'border-orange-500 text-orange-600'
+                  : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'
+              }`}
+            >
+              Revision ({orders.filter(o => o.status === 'revision').length})
+            </button>
+          </nav>
         </div>
         
-        {orders.length === 0 ? (
+        {getFilteredOrders().length === 0 ? (
           <div className="p-8 text-center">
             <ImageIcon className="h-16 w-16 text-gray-400 mx-auto mb-4" />
-            <h3 className="text-lg font-medium text-gray-900 mb-2">No orders assigned</h3>
-            <p className="text-gray-600">You don't have any orders assigned to you yet.</p>
+            <h3 className="text-lg font-medium text-gray-900 mb-2">
+              {activeTab === 'assigned' && 'No assigned orders'}
+              {activeTab === 'completed' && 'No completed orders'}
+              {activeTab === 'revision' && 'No orders in revision'}
+            </h3>
+            <p className="text-gray-600">
+              {activeTab === 'assigned' && "You don't have any orders assigned to you yet."}
+              {activeTab === 'completed' && "No orders have been completed yet."}
+              {activeTab === 'revision' && "No orders are currently in revision."}
+            </p>
           </div>
         ) : (
-          <div className="divide-y divide-gray-200">
-            {orders.map((orderItem) => (
-              <div key={orderItem.id} className="p-6">
-                <div className="flex flex-col lg:flex-row lg:items-center lg:justify-between">
-                  <div className="flex-1">
-                    <div className="flex items-center space-x-3 mb-2">
-                      <h3 className="text-lg font-medium text-gray-900">
-                        Order #{orderItem.order_id}
-                      </h3>
-                      <span className={`px-2 py-1 text-xs font-medium rounded-full ${getStatusColor(orderItem.status)}`}>
-                        {orderItem.status.replace('_', ' ')}
-                      </span>
-                    </div>
-                    
-                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4 text-sm text-gray-600">
-                      <div>
-                        <p><span className="font-medium">Customer:</span> {orderItem.orders?.profiles?.full_name || 'N/A'}</p>
-                        <p><span className="font-medium">Service:</span> {orderItem.services?.name}</p>
+          <div className="overflow-x-auto">
+            <table className="min-w-full divide-y divide-gray-200">
+              <thead className="bg-gray-50">
+                <tr>
+                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                    Order Info
+                  </th>
+                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                    Original Images
+                  </th>
+                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                    Instructions
+                  </th>
+                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                    Upload
+                  </th>
+                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                    Edited Images
+                  </th>
+                </tr>
+              </thead>
+              <tbody className="bg-white divide-y divide-gray-200">
+                {getFilteredOrders().map((orderItem) => (
+                  <tr key={orderItem.id} className="hover:bg-gray-50">
+                    {/* Order Info */}
+                    <td className="px-6 py-4 whitespace-nowrap">
+                      <div className="space-y-1">
+                        <div className="flex items-center space-x-2">
+                          <span className="text-sm font-medium text-gray-900">
+                            Order #{orderItem.order_id}
+                          </span>
+                          <span className={`px-2 py-1 text-xs font-medium rounded-full ${getStatusColor(orderItem.status)}`}>
+                            {orderItem.status.replace('_', ' ')}
+                          </span>
+                        </div>
+                        <div className="text-sm text-gray-600">
+                          <p><span className="font-medium">Customer:</span> {orderItem.orders?.profiles?.full_name || 'N/A'}</p>
+                          <p><span className="font-medium">Service:</span> {orderItem.services?.name}</p>
+                          <p><span className="font-medium">Assigned:</span> {new Date(orderItem.assigned_at).toLocaleDateString()}</p>
+                          <p><span className="font-medium">Quantity:</span> {orderItem.quantity} images</p>
+                        </div>
                       </div>
-                      <div>
-                        <p><span className="font-medium">Assigned:</span> {new Date(orderItem.assigned_at).toLocaleDateString()}</p>
-                        <p><span className="font-medium">Quantity:</span> {orderItem.quantity} images</p>
-                      </div>
-                    </div>
+                    </td>
 
                     {/* Original Images */}
-                    {orderItem.specifications?.photos && orderItem.specifications.photos.length > 0 && (
-                      <div className="mt-4">
-                        <h4 className="text-sm font-medium text-gray-900 mb-3">
-                          Original Images ({orderItem.specifications.photos.length}):
-                        </h4>
-                        <div className="grid grid-cols-2 sm:grid-cols-4 md:grid-cols-6 gap-2">
-                          {orderItem.specifications.photos.map((photo, index) => (
+                    <td className="px-6 py-4">
+                      {orderItem.specifications?.photos && orderItem.specifications.photos.length > 0 ? (
+                        <div className="flex flex-wrap gap-3 max-w-lg">
+                          {orderItem.specifications.photos.slice(0, 4).map((photo, index) => (
                             <div key={index} className="relative group">
                               {photo.url ? (
                                 <img
                                   src={getImageUrl(photo.url)}
                                   alt={photo.filename || 'Original image'}
-                                  className="w-full h-16 object-cover rounded border cursor-pointer hover:opacity-75 transition-opacity"
+                                  className="w-24 h-24 object-cover rounded border cursor-pointer hover:opacity-75 transition-opacity"
                                   loading="lazy"
                                   onClick={(e) => {
                                     e.stopPropagation()
                                     setPreviewImage(photo)
                                   }}
-                                  onError={(e) => {
-                                    e.target.style.display = 'none'
-                                    e.target.nextSibling.style.display = 'flex'
-                                  }}
                                 />
-                              ) : null}
-                              <div className="w-full h-16 hidden items-center justify-center bg-gray-100 rounded border">
-                                <div className="text-center">
-                                  <ImageIcon className="h-4 w-4 text-gray-400 mx-auto mb-1" />
-                                  <p className="text-xs text-gray-500">No image</p>
+                              ) : (
+                                <div className="w-24 h-24 flex items-center justify-center bg-gray-100 rounded border">
+                                  <ImageIcon className="h-7 w-7 text-gray-400" />
                                 </div>
-                              </div>
-                              
-                              {/* Hover overlay with actions */}
-                              <div className="absolute inset-0 bg-black bg-opacity-0 group-hover:bg-opacity-50 transition-all duration-200 rounded flex items-center justify-center gap-1 opacity-0 group-hover:opacity-100">
+                              )}
+                              <div className="absolute inset-0 bg-black bg-opacity-0 group-hover:bg-opacity-50 transition-all duration-200 rounded flex items-center justify-center opacity-0 group-hover:opacity-100">
                                 <button
                                   onClick={(e) => {
                                     e.stopPropagation()
                                     setPreviewImage(photo)
                                   }}
-                                  className="bg-white text-gray-900 p-1 rounded hover:bg-gray-100 transition-colors"
+                                  className="bg-white text-gray-900 p-1.5 rounded hover:bg-gray-100 transition-colors"
                                   title="Preview image"
                                 >
-                                  <ZoomIn className="h-3 w-3" />
-                                </button>
-                                <button
-                                  onClick={(e) => {
-                                    e.stopPropagation()
-                                    downloadOriginalImage(photo.url, photo.filename)
-                                  }}
-                                  className="bg-white text-gray-900 p-1 rounded hover:bg-gray-100 transition-colors"
-                                  title="Download original image"
-                                >
-                                  <Download className="h-3 w-3" />
+                                  <ZoomIn className="h-5 w-5" />
                                 </button>
                               </div>
                             </div>
                           ))}
+                          {orderItem.specifications.photos.length > 4 && (
+                            <div className="w-24 h-24 flex items-center justify-center bg-gray-100 rounded border text-sm text-gray-600">
+                              +{orderItem.specifications.photos.length - 4}
+                            </div>
+                          )}
                         </div>
+                      ) : (
+                        <span className="text-sm text-gray-500">No images</span>
+                      )}
+                    </td>
+
+                    {/* Special Instructions */}
+                    <td className="px-6 py-4">
+                      <div className="max-w-xs">
+                        {orderItem.specifications?.notes ? (
+                          <div className="p-2 bg-blue-50 border border-blue-200 rounded text-xs">
+                            <div className="flex items-start space-x-1">
+                              <FileText className="h-3 w-3 text-blue-600 mt-0.5 flex-shrink-0" />
+                              <p className="text-blue-700 line-clamp-3">{orderItem.specifications.notes}</p>
+                            </div>
+                          </div>
+                        ) : (
+                          <span className="text-sm text-gray-500">No instructions</span>
+                        )}
                       </div>
-                    )}
+                    </td>
+
+                    {/* Upload Section */}
+                    <td className="px-6 py-4">
+                      {!orderItem.hasNoItems && orderItem.status !== 'cancelled' ? (
+                        <div className="space-y-2 max-w-xs">
+                          {(activeTab === 'assigned' || activeTab === 'revision') && (
+                            <input
+                              type="file"
+                              accept="image/*"
+                              id={`file-upload-${orderItem.id}`}
+                              key={`file-upload-${orderItem.id}`}
+                              onChange={(e) => handleFileSelect(orderItem.id, e.target.files)}
+                              className="block w-full text-xs text-gray-500 file:mr-2 file:py-1 file:px-2 file:rounded file:border-0 file:text-xs file:font-medium file:bg-purple-50 file:text-purple-700 hover:file:bg-purple-100"
+                            />
+                          )}
+                          <div className="flex flex-col gap-1">
+                            {orderItem.status === 'assigned' && (
+                              <button
+                                onClick={() => markAsInProgress(orderItem.id)}
+                                className="w-full px-2 py-1 bg-blue-600 text-white rounded text-xs hover:bg-blue-700 flex items-center justify-center space-x-1"
+                              >
+                                <Clock className="h-3 w-3" />
+                                <span>Start</span>
+                              </button>
+                            )}
+                            {(activeTab === 'assigned' || activeTab === 'revision') && (
+                              <button
+                                onClick={() => uploadEditedImage(orderItem.id)}
+                                disabled={!selectedFiles[orderItem.id] || uploadingImage === orderItem.id}
+                                className="w-full px-2 py-1 bg-green-600 text-white rounded text-xs hover:bg-green-700 disabled:bg-gray-400 disabled:cursor-not-allowed flex items-center justify-center space-x-1"
+                              >
+                                {uploadingImage === orderItem.id ? (
+                                  <div className="animate-spin rounded-full h-3 w-3 border-b border-white"></div>
+                                ) : (
+                                  <>
+                                    <Upload className="h-3 w-3" />
+                                    <span>
+                                      {orderItem.specifications?.editedImages?.length > 0 ? 'Upload +' : 'Upload'}
+                                    </span>
+                                  </>
+                                )}
+                              </button>
+                            )}
+                            {activeTab === 'revision' && orderItem.status === 'revision' && (
+                              <button
+                                onClick={() => markAsInProgress(orderItem.id)}
+                                className="w-full px-2 py-1 bg-orange-600 text-white rounded text-xs hover:bg-orange-700 flex items-center justify-center space-x-1"
+                              >
+                                <RefreshCw className="h-3 w-3" />
+                                <span>Revise</span>
+                              </button>
+                            )}
+                          </div>
+                          {orderItem.status === 'completed' && (
+                            <div className="flex items-center text-green-600 text-xs">
+                              <CheckCircle className="h-3 w-3 mr-1" />
+                              <span>Done</span>
+                            </div>
+                          )}
+                        </div>
+                      ) : orderItem.hasNoItems ? (
+                        <span className="text-xs text-amber-600">No items</span>
+                      ) : (
+                        <span className="text-xs text-gray-500">Cancelled</span>
+                      )}
+                    </td>
 
                     {/* Edited Images */}
-                    {orderItem.specifications?.editedImages && orderItem.specifications.editedImages.length > 0 && (
-                      <div className="mt-4">
-                        <h4 className="text-sm font-medium text-gray-900 mb-3">
-                          Edited Images ({orderItem.specifications.editedImages.length}):
-                        </h4>
-                        <div className="grid grid-cols-2 sm:grid-cols-4 md:grid-cols-6 gap-2">
-                          {orderItem.specifications.editedImages.map((editedImage, index) => (
+                    <td className="px-6 py-4">
+                      {orderItem.specifications?.editedImages && orderItem.specifications.editedImages.length > 0 ? (
+                        <div className="flex flex-wrap gap-3 max-w-lg">
+                          {orderItem.specifications.editedImages.slice(0, 4).map((editedImage, index) => (
                             <div key={index} className="relative group">
                               <img
-                                src={editedImage.publicUrl || getImageUrl(editedImage.url)}
+                                src={getEditedImageUrl(editedImage)}
                                 alt={editedImage.filename || 'Edited image'}
-                                className="w-full h-16 object-cover rounded border cursor-pointer hover:opacity-75 transition-opacity ring-2 ring-green-500"
+                                className="w-24 h-24 object-cover rounded border cursor-pointer hover:opacity-75 transition-opacity ring-2 ring-green-500"
                                 loading="lazy"
                                 onClick={(e) => {
                                   e.stopPropagation()
                                   setPreviewImage({
-                                    url: editedImage.url,
+                                    url: getEditedImageUrl(editedImage),
                                     filename: editedImage.filename,
                                     size: editedImage.size
                                   })
@@ -605,109 +807,47 @@ export default function EditorDashboard() {
                                   e.target.nextSibling.style.display = 'flex'
                                 }}
                               />
-                              <div className="w-full h-16 hidden items-center justify-center bg-gray-100 rounded border">
+                              <div className="w-24 h-24 hidden items-center justify-center bg-gray-100 rounded border">
                                 <div className="text-center">
-                                  <ImageIcon className="h-4 w-4 text-gray-400 mx-auto mb-1" />
-                                  <p className="text-xs text-gray-500">No image</p>
+                                  <ImageIcon className="h-6 w-6 text-gray-400 mx-auto mb-1" />
+                                  <p className="text-xs text-gray-500">Load failed</p>
                                 </div>
                               </div>
-                              
-                              {/* Green checkmark indicator */}
                               <div className="absolute top-1 right-1 bg-green-500 text-white rounded-full p-1">
                                 <CheckCircle className="h-3 w-3" />
                               </div>
-                              
-                              {/* Hover overlay with actions */}
-                              <div className="absolute inset-0 bg-black bg-opacity-0 group-hover:bg-opacity-50 transition-all duration-200 rounded flex items-center justify-center gap-1 opacity-0 group-hover:opacity-100">
+                              <div className="absolute inset-0 bg-black bg-opacity-0 group-hover:bg-opacity-50 transition-all duration-200 rounded flex items-center justify-center opacity-0 group-hover:opacity-100">
                                 <button
                                   onClick={(e) => {
                                     e.stopPropagation()
                                     setPreviewImage({
-                                      url: editedImage.url,
+                                      url: getEditedImageUrl(editedImage),
                                       filename: editedImage.filename,
                                       size: editedImage.size
                                     })
                                   }}
-                                  className="bg-white text-gray-900 p-1 rounded hover:bg-gray-100 transition-colors"
+                                  className="bg-white text-gray-900 p-1.5 rounded hover:bg-gray-100 transition-colors"
                                   title="Preview edited image"
                                 >
-                                  <ZoomIn className="h-3 w-3" />
-                                </button>
-                                <button
-                                  onClick={(e) => {
-                                    e.stopPropagation()
-                                    downloadOriginalImage(editedImage.publicUrl || editedImage.url, editedImage.filename)
-                                  }}
-                                  className="bg-white text-gray-900 p-1 rounded hover:bg-gray-100 transition-colors"
-                                  title="Download edited image"
-                                >
-                                  <Download className="h-3 w-3" />
+                                  <ZoomIn className="h-5 w-5" />
                                 </button>
                               </div>
                             </div>
                           ))}
-                        </div>
-                      </div>
-                    )}
-                  </div>
-
-                  {/* Actions */}
-                  <div className="mt-4 lg:mt-0 lg:ml-6 flex flex-col space-y-2">
-                    {orderItem.hasNoItems ? (
-                      <div className="text-sm text-amber-600 bg-amber-50 p-3 rounded-md">
-                        <p className="font-medium">Order has no items</p>
-                        <p>This order exists but contains no work items to edit.</p>
-                      </div>
-                    ) : (
-                      <>
-                        {orderItem.status === 'assigned' && (
-                          <button
-                            onClick={() => markAsInProgress(orderItem.id)}
-                            className="px-4 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700 text-sm"
-                          >
-                            Start Working
-                          </button>
-                        )}
-
-                    {orderItem.status !== 'cancelled' && (
-                      <div className="space-y-2">
-                        <input
-                          type="file"
-                          accept="image/*"
-                          onChange={(e) => handleFileSelect(orderItem.id, e.target.files)}
-                          className="block w-full text-sm text-gray-500 file:mr-4 file:py-2 file:px-4 file:rounded-md file:border-0 file:text-sm file:font-medium file:bg-purple-50 file:text-purple-700 hover:file:bg-purple-100"
-                        />
-                        <button
-                          onClick={() => uploadEditedImage(orderItem.id)}
-                          disabled={!selectedFiles[orderItem.id] || uploadingImage === orderItem.id}
-                          className="w-full px-4 py-2 bg-green-600 text-white rounded-md hover:bg-green-700 disabled:bg-gray-400 disabled:cursor-not-allowed text-sm flex items-center justify-center space-x-2"
-                        >
-                          {uploadingImage === orderItem.id ? (
-                            <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-white"></div>
-                          ) : (
-                            <>
-                              <Upload className="h-4 w-4" />
-                              <span>
-                                {orderItem.specifications?.editedImages?.length > 0 ? 'Upload Another' : 'Upload Edited'}
-                              </span>
-                            </>
+                          {orderItem.specifications.editedImages.length > 4 && (
+                            <div className="w-24 h-24 flex items-center justify-center bg-gray-100 rounded border text-sm text-gray-600">
+                              +{orderItem.specifications.editedImages.length - 4}
+                            </div>
                           )}
-                        </button>
-                      </div>
-                    )}
-
-                        {orderItem.status === 'completed' && (
-                          <div className="flex items-center text-green-600 text-sm">
-                            <CheckCircle className="h-4 w-4 mr-2" />
-                            Completed on {new Date(orderItem.completed_at).toLocaleDateString()}
-                          </div>
-                        )}
-                      </>
-                    )}
-                  </div>
-                </div>
-              </div>
-            ))}
+                        </div>
+                      ) : (
+                        <span className="text-sm text-gray-500">None yet</span>
+                      )}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
           </div>
         )}
       </div>
