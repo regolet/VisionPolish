@@ -11,7 +11,7 @@ export default function Header() {
   const [ordersCount, setOrdersCount] = useState(0)
   const navigate = useNavigate()
   const profileDropdownRef = useRef(null)
-  const { user, profile, signOut, isAuthenticated, isAdmin, isEditor } = useAuth()
+  const { user, profile, signOut, forceSignOut, isAuthenticated, isAdmin, isEditor } = useAuth()
 
   useEffect(() => {
     if (user) {
@@ -68,11 +68,21 @@ export default function Header() {
 
   const handleSignOut = async () => {
     try {
-      await signOut()
+      console.log('🚪 Header: Starting sign out...')
+      const result = await signOut()
+      
+      if (result?.error) {
+        console.error('❌ Header: SignOut returned error, trying force signout:', result.error)
+        forceSignOut()
+      }
+      
+      console.log('✅ Header: Navigating to home page')
       navigate('/')
     } catch (error) {
-      console.error('Error during sign out:', error)
-      // Force navigation even if signout fails
+      console.error('❌ Header: SignOut exception, using force signout:', error)
+      // If normal signout fails, force clear everything
+      forceSignOut()
+      // Force navigation regardless of errors
       navigate('/')
     }
   }

@@ -110,28 +110,106 @@ export default function Checkout() {
     setProcessing(true)
 
     try {
+      // First check if order exists and belongs to current user
+      const { data: orderCheck, error: checkError } = await supabase
+        .from('orders')
+        .select('id, user_id, status')
+        .eq('id', orderId)
+        .single()
+
+      if (checkError || !orderCheck) {
+        console.error('Order verification failed:', checkError)
+        alert('Unable to verify order. Please refresh and try again.')
+        setProcessing(false)
+        return
+      }
+
+      if (orderCheck.user_id !== user.id) {
+        console.error('Order does not belong to current user')
+        alert('Order verification failed. Please login and try again.')
+        setProcessing(false)
+        return
+      }
+
+      // Check if order is already processed
+      if (orderCheck.status === 'processing' || orderCheck.status === 'completed') {
+        console.log('Order already processed, redirecting to success page')
+        navigate(`/order-success?order=${orderId}`)
+        setProcessing(false)
+        return
+      }
+
+      // Only allow payment for orders in 'pending' status
+      if (orderCheck.status !== 'pending') {
+        console.error('Invalid order status for payment:', orderCheck.status)
+        alert(`This order cannot be processed. Current status: ${orderCheck.status}. Please contact support.`)
+        setProcessing(false)
+        return
+      }
+
       // Update order status (images are already uploaded from cart)
-      const { error } = await supabase
+      const { data: updateData, error } = await supabase
         .from('orders')
         .update({
           status: 'processing',
           payment_status: 'completed',
-          payment_method: 'card'
+          payment_method: 'card',
+          updated_at: new Date().toISOString()
         })
         .eq('id', orderId)
+        .eq('user_id', user.id) // Extra security check
+        .eq('status', 'pending') // Only update if still pending
+        .select()
 
       if (error) {
-        console.error('Payment update error:', error)
-        alert('Payment processing failed. Please try again.')
+        console.error('Payment update error details:', {
+          error,
+          message: error.message,
+          details: error.details,
+          hint: error.hint,
+          code: error.code
+        })
+        
+        // More specific error messages
+        if (error.code === '42501') {
+          alert('Permission denied. Please ensure you are logged in and try again.')
+        } else if (error.message?.includes('violates')) {
+          alert('Order update failed due to data constraints. Please contact support.')
+        } else {
+          alert(`Payment processing failed: ${error.message || 'Unknown error'}. Please try again.`)
+        }
+        setProcessing(false)
         return
       }
+
+      // Check if any rows were actually updated
+      if (!updateData || updateData.length === 0) {
+        console.error('No rows updated - order status may have changed')
+        // Re-check the order status
+        const { data: recheckData } = await supabase
+          .from('orders')
+          .select('status')
+          .eq('id', orderId)
+          .single()
+        
+        if (recheckData?.status === 'processing' || recheckData?.status === 'completed') {
+          console.log('Order was processed by another session, redirecting to success')
+          navigate(`/order-success?order=${orderId}`)
+        } else {
+          alert('Payment could not be processed. The order status has changed. Please refresh and try again.')
+        }
+        setProcessing(false)
+        return
+      }
+
+      console.log('Payment processed successfully:', updateData)
 
       // Navigate to success page
       navigate(`/order-success?order=${orderId}`)
       
     } catch (error) {
       console.error('Payment processing error:', error)
-      alert('An error occurred during payment processing')
+      alert(`An error occurred during payment processing: ${error.message || 'Unknown error'}`)
     } finally {
       setProcessing(false)
     }

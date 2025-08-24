@@ -2,7 +2,7 @@ import { useState, useEffect } from 'react'
 import { useNavigate, Link } from 'react-router-dom'
 import { useAuth } from '../contexts/AuthContext'
 import { supabase } from '../lib/supabase'
-import { Plus, Edit, Trash2, Save, X, Eye, Shield, Users, Package, ClipboardList, Database } from 'lucide-react'
+import { Plus, Edit, Trash2, Save, X, Eye, Shield, Users, Package, ClipboardList } from 'lucide-react'
 
 export default function AdminDashboard() {
   const [services, setServices] = useState([])
@@ -195,13 +195,6 @@ export default function AdminDashboard() {
             >
               <ClipboardList className="h-4 w-4 mr-2" />
               Manage Orders
-            </Link>
-            <Link
-              to="/admin/rls"
-              className="bg-orange-600 text-white px-4 py-3 rounded-lg hover:bg-orange-700 transition flex items-center justify-center text-sm"
-            >
-              <Database className="h-4 w-4 mr-2" />
-              RLS Settings
             </Link>
             <button
               onClick={startAddNew}

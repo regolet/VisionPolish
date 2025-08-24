@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useMemo, useCallback } from 'react'
 import { useAuth } from '../contexts/AuthContext'
 import { useNotification } from '../contexts/NotificationContext'
 import { supabase } from '../lib/supabase'
@@ -36,106 +36,115 @@ export default function EditorDashboard() {
 
   const fetchAssignedOrders = async () => {
     try {
-      // First get orders assigned to this editor
-      const { data: assignedOrders, error: ordersError } = await supabase
-        .from('orders')
-        .select('*')
-        .eq('assigned_editor', user.id)
-        .order('created_at', { ascending: false })
+      // Use Promise.all to parallelize independent database queries
+      const [assignedOrdersResult, assignedItemsResult, pendingRevisionsResult] = await Promise.all([
+        // Get orders assigned to this editor
+        supabase
+          .from('orders')
+          .select('*')
+          .eq('assigned_editor', user.id)
+          .order('created_at', { ascending: false }),
+        
+        // Get order items assigned to this editor
+        supabase
+          .from('order_items')
+          .select('order_id')
+          .eq('assigned_editor', user.id),
+        
+        // Get orders that have revisions assigned to this editor
+        supabase
+          .from('revisions')
+          .select('order_item_id, order_items!inner(order_id)')
+          .eq('assigned_to', user.id)
+          .eq('status', 'pending')
+      ])
 
-      // Also get orders that have items or revisions assigned to this editor
-      // First, get order items assigned to this editor
-      const { data: assignedItems, error: assignedItemsError } = await supabase
-        .from('order_items')
-        .select('order_id')
-        .eq('assigned_editor', user.id)
+      const { data: assignedOrders, error: ordersError } = assignedOrdersResult
+      const { data: assignedItems, error: assignedItemsError } = assignedItemsResult
+      const { data: revisionsAssignedToEditor, error: revisionsError } = pendingRevisionsResult
 
-      // Second, get orders that have revisions assigned to this editor (even if order is not assigned to them)
-      const { data: revisionsAssignedToEditor, error: revisionsError } = await supabase
-        .from('revisions')
-        .select('order_item_id, order_items!inner(order_id)')
-        .eq('assigned_to', user.id)
-        .eq('status', 'pending')
+      if (ordersError) throw ordersError
+      if (assignedItemsError) throw assignedItemsError
+      if (revisionsError) throw revisionsError
 
-      let additionalOrders = []
+      // Collect additional order IDs
       const additionalOrderIds = new Set()
       
       // Add orders from assigned items
-      if (assignedItems) {
-        assignedItems.forEach(item => additionalOrderIds.add(item.order_id))
-      }
+      assignedItems?.forEach(item => additionalOrderIds.add(item.order_id))
       
       // Add orders from assigned revisions
-      if (revisionsAssignedToEditor) {
-        revisionsAssignedToEditor.forEach(rev => additionalOrderIds.add(rev.order_items.order_id))
-      }
+      revisionsAssignedToEditor?.forEach(rev => additionalOrderIds.add(rev.order_items.order_id))
       
       // Filter out orders we already have
       const newOrderIds = [...additionalOrderIds].filter(orderId => 
-        !assignedOrders.some(order => order.id === orderId)
+        !assignedOrders?.some(order => order.id === orderId)
       )
 
+      // Get additional orders if needed
+      let additionalOrders = []
       if (newOrderIds.length > 0) {
         const { data: extraOrders, error: extraOrdersError } = await supabase
           .from('orders')
           .select('*')
           .in('id', newOrderIds)
 
-        if (!extraOrdersError) {
-          additionalOrders = extraOrders || []
-        }
+        if (extraOrdersError) throw extraOrdersError
+        additionalOrders = extraOrders || []
       }
 
-      // Combine assigned orders and orders with revisions assigned to this editor
-      const allOrders = [...assignedOrders, ...additionalOrders]
+      // Combine all orders
+      const allOrders = [...(assignedOrders || []), ...additionalOrders]
         .sort((a, b) => new Date(b.created_at) - new Date(a.created_at))
 
-      if (ordersError) throw ordersError
-
-      if (!allOrders || allOrders.length === 0) {
+      if (!allOrders.length) {
         setOrders([])
         setLoading(false)
         return
       }
 
-      // Get order items for these orders with specifications
+      // Parallelize the remaining queries
       const orderIds = allOrders.map(order => order.id)
-      
-      const { data: orderItems, error: itemsError } = await supabase
-        .from('order_items')
-        .select(`
-          id,
-          order_id,
-          service_id,
-          quantity,
-          price,
-          status,
-          specifications,
-          assigned_editor,
-          services (
-            name,
-            description
-          )
-        `)
-        .in('order_id', orderIds)
-
-      if (itemsError) throw itemsError
-
-      // Get customer profiles for these orders
       const customerIds = allOrders.map(order => order.user_id)
       
-      const { data: customerProfiles, error: profilesError } = await supabase
-        .from('profiles')
-        .select('id, full_name')
-        .in('id', customerIds)
+      const [orderItemsResult, customerProfilesResult] = await Promise.all([
+        // Get order items with services in a single query
+        supabase
+          .from('order_items')
+          .select(`
+            id,
+            order_id,
+            service_id,
+            quantity,
+            price,
+            status,
+            specifications,
+            assigned_editor,
+            services (
+              name,
+              description
+            )
+          `)
+          .in('order_id', orderIds),
+        
+        // Get customer profiles
+        supabase
+          .from('profiles')
+          .select('id, full_name')
+          .in('id', customerIds)
+      ])
 
+      const { data: orderItems, error: itemsError } = orderItemsResult
+      const { data: customerProfiles, error: profilesError } = customerProfilesResult
+
+      if (itemsError) throw itemsError
       if (profilesError) throw profilesError
 
-      // Get revisions for these order items from the new revisions table
-      const orderItemIds = orderItems ? orderItems.map(item => item.id) : []
+      // Get revisions for order items (if any exist)
       let revisions = []
-      
-      if (orderItemIds.length > 0) {
+      if (orderItems?.length > 0) {
+        const orderItemIds = orderItems.map(item => item.id)
+        
         const { data: revisionsData, error: revisionsError } = await supabase
           .from('revisions')
           .select(`
@@ -151,16 +160,17 @@ export default function EditorDashboard() {
           .in('order_item_id', orderItemIds)
           .order('created_at', { ascending: false })
 
-        if (!revisionsError) {
-          revisions = revisionsData || []
-        }
+        if (revisionsError) throw revisionsError
+        revisions = revisionsData || []
       }
 
-      // Combine all data
-      if (!orderItems || orderItems.length === 0) {
+      // Process data efficiently using Maps for O(1) lookups
+      if (!orderItems?.length) {
         // If no order items, show the orders anyway but indicate they have no items
+        const customerMap = new Map(customerProfiles.map(p => [p.id, p]))
+        
         const transformedOrders = allOrders.map(order => {
-          const customer = customerProfiles.find(p => p.id === order?.user_id)
+          const customer = customerMap.get(order.user_id)
           
           return {
             id: `order-${order.id}`, // Unique ID for orders without items
@@ -168,13 +178,13 @@ export default function EditorDashboard() {
             service_id: null,
             quantity: 0,
             price: 0,
-            status: order?.status || 'assigned',
-            assigned_at: order?.updated_at,
+            status: order.status || 'assigned',
+            assigned_at: order.updated_at,
             completed_at: null,
             orders: {
-              id: order?.id,
-              status: order?.status,
-              created_at: order?.created_at,
+              id: order.id,
+              status: order.status,
+              created_at: order.created_at,
               profiles: customer
             },
             services: { name: 'No items in this order', description: 'Order has no items to edit' },
@@ -185,23 +195,33 @@ export default function EditorDashboard() {
         })
         setOrders(transformedOrders)
       } else {
-        const transformedOrders = (orderItems || [])
+        // Create lookup maps for efficient processing
+        const orderMap = new Map(allOrders.map(o => [o.id, o]))
+        const customerMap = new Map(customerProfiles.map(p => [p.id, p]))
+        const revisionsMap = new Map()
+        
+        // Group revisions by order_item_id for O(1) lookup
+        revisions.forEach(revision => {
+          if (!revisionsMap.has(revision.order_item_id)) {
+            revisionsMap.set(revision.order_item_id, [])
+          }
+          revisionsMap.get(revision.order_item_id).push(revision)
+        })
+        
+        const transformedOrders = orderItems
           .filter(item => {
             // Only show items that are assigned to the current editor
-            // Either directly assigned to the item, or through the order, or has revisions assigned to this editor
-            const order = allOrders.find(o => o.id === item.order_id)
+            const order = orderMap.get(item.order_id)
             const effectiveEditor = item.assigned_editor || order?.assigned_editor
-            const hasAssignedRevisions = revisions.some(r => 
-              r.order_item_id === item.id && r.assigned_to === user.id
-            )
+            const hasAssignedRevisions = revisionsMap.has(item.id) && 
+              revisionsMap.get(item.id).some(r => r.assigned_to === user.id)
             
             return effectiveEditor === user.id || hasAssignedRevisions
           })
           .map(item => {
-            const order = allOrders.find(o => o.id === item.order_id)
-            const customer = customerProfiles.find(p => p.id === order?.user_id)
-            // Get revisions for this specific order item
-            const itemRevisions = revisions.filter(r => r.order_item_id === item.id)
+            const order = orderMap.get(item.order_id)
+            const customer = customerMap.get(order?.user_id)
+            const itemRevisions = revisionsMap.get(item.id) || []
             
             return {
               id: item.id,
@@ -213,9 +233,9 @@ export default function EditorDashboard() {
               assigned_at: order?.updated_at,
               completed_at: null,
               specifications: item.specifications || { photos: [] },
-              revisions: itemRevisions, // Store revisions from the database
-              assigned_editor: item.assigned_editor, // Store item-level assignment
-              effective_editor: item.assigned_editor || order?.assigned_editor, // Calculated effective editor
+              revisions: itemRevisions,
+              assigned_editor: item.assigned_editor,
+              effective_editor: item.assigned_editor || order?.assigned_editor,
               orders: {
                 id: order?.id,
                 status: order?.status,
@@ -225,38 +245,6 @@ export default function EditorDashboard() {
               services: item.services
             }
           })
-        
-        // Debug logging - let's also check what raw data we got
-        console.log('👤 Debug - Current editor ID:', user.id)
-        console.log('🔍 Debug - Raw orders data:', allOrders.map(o => ({
-          id: o.id,
-          status: o.status,
-          assigned_editor: o.assigned_editor,
-          user_id: o.user_id,
-          isAssignedToCurrentEditor: o.assigned_editor === user.id
-        })))
-        
-        console.log('🔍 Debug - Raw revisions data:', revisions.map(r => ({
-          id: r.id,
-          order_item_id: r.order_item_id,
-          status: r.status,
-          assigned_to: r.assigned_to,
-          requested_by: r.requested_by
-        })))
-        
-        transformedOrders.forEach(o => {
-          console.log(`🔍 Debug - Order #${o.order_id}:`, {
-            status: o.status,
-            revisionsCount: o.revisions?.length || 0,
-            pendingRevisions: o.revisions?.filter(rev => rev.status === 'pending').length || 0,
-            revisionDetails: o.revisions?.map(rev => ({
-              id: rev.id,
-              status: rev.status,
-              assigned_to: rev.assigned_to,
-              notes: rev.notes?.substring(0, 50) + '...'
-            })) || []
-          })
-        })
         
         setOrders(transformedOrders)
       }
@@ -380,16 +368,16 @@ export default function EditorDashboard() {
     }
   }
 
-  const handleFileSelect = (orderItemId, files) => {
+  const handleFileSelect = useCallback((orderItemId, files) => {
     if (files && files[0]) {
       setSelectedFiles(prev => ({
         ...prev,
         [orderItemId]: files[0]
       }))
     }
-  }
+  }, [])
 
-  const uploadEditedImage = async (orderItemId) => {
+  const uploadEditedImage = useCallback(async (orderItemId) => {
     const file = selectedFiles[orderItemId]
     if (!file) {
       showError('Please select a file to upload')
@@ -521,20 +509,12 @@ export default function EditorDashboard() {
           throw itemUpdateError
         }
         
-        // Update order status back to completed since revision is done
-        const { error: orderStatusError } = await supabase
-          .from('orders')
-          .update({
-            status: 'completed',
-            updated_at: new Date().toISOString()
-          })
-          .eq('id', orderItem.order_id)
-
-        if (orderStatusError) {
-          console.error('Error updating order status:', orderStatusError)
-        }
-        
         showSuccess('Revision completed successfully!')
+        
+        // Note: We don't update the order status to 'completed' here because:
+        // 1. There might be other pending revisions for other items in the same order
+        // 2. The customer's Orders.jsx has logic to automatically update status when ALL revisions are complete
+        // 3. This prevents the status inconsistency between customer and editor views
       } else {
         // Regular upload (not a revision)
         editedImages.push(newEditedImage)
@@ -557,20 +537,40 @@ export default function EditorDashboard() {
           throw itemUpdateError
         }
         
-        // Update order status to completed for regular uploads
-        const { error: orderUpdateError } = await supabase
-          .from('orders')
-          .update({
-            status: 'completed',
-            updated_at: new Date().toISOString()
-          })
-          .eq('id', orderItem.order_id)
-
-        if (orderUpdateError) {
-          throw orderUpdateError
+        // Check if all items in this order are completed
+        const { data: allOrderItems, error: checkError } = await supabase
+          .from('order_items')
+          .select('id, specifications')
+          .eq('order_id', orderItem.order_id)
+        
+        if (checkError) {
+          console.error('Error checking order items:', checkError)
         }
         
-        showSuccess('Image uploaded successfully! Order marked as completed.')
+        // Only mark order as completed if ALL items have edited images
+        const allItemsCompleted = allOrderItems?.every(item => 
+          item.specifications?.editedImages?.length > 0
+        )
+        
+        if (allItemsCompleted) {
+          // All items are completed, so mark the order as completed
+          const { error: orderUpdateError } = await supabase
+            .from('orders')
+            .update({
+              status: 'completed',
+              updated_at: new Date().toISOString()
+            })
+            .eq('id', orderItem.order_id)
+
+          if (orderUpdateError) {
+            throw orderUpdateError
+          }
+          
+          showSuccess('Image uploaded successfully! All items completed - order marked as completed.')
+        } else {
+          // Not all items are completed yet
+          showSuccess('Image uploaded successfully! Other items in this order still need processing.')
+        }
       }
 
       // Clear the selected file and reset file input
@@ -598,7 +598,7 @@ export default function EditorDashboard() {
     } finally {
       setUploadingImage(null)
     }
-  }
+  }, [user.id, orders, selectedFiles, showError, showSuccess, fetchAssignedOrders])
 
   const getStatusColor = (status) => {
     switch (status) {
@@ -633,73 +633,75 @@ export default function EditorDashboard() {
     }
   }
 
-  const getFilteredOrders = () => {
+  // Memoized filtered orders for better performance
+  const filteredOrders = useMemo(() => {
     switch (activeTab) {
-      case 'assigned':
+      case 'assigned': {
         // Show orders that are assigned/in_progress AND don't have pending revisions AND aren't in revision status
         return orders.filter(o => {
           const isAssignedStatus = ['assigned', 'in_progress'].includes(o.status)
           const hasPendingRevisions = o.revisions?.some(rev => rev.status === 'pending')
-          
-          // Debug logging for revision status orders
-          if (o.status === 'revision') {
-            console.log('🔍 Debug - Order in revision status found:', {
-              orderId: o.order_id,
-              status: o.status,
-              isAssignedStatus,
-              hasPendingRevisions,
-              revisionsCount: o.revisions?.length || 0,
-              pendingRevisions: o.revisions?.filter(rev => rev.status === 'pending').length || 0,
-              revisionDetails: o.revisions?.map(rev => ({
-                id: rev.id,
-                status: rev.status,
-                assigned_to: rev.assigned_to,
-                current_editor: user.id,
-                is_assigned_to_me: rev.assigned_to === user.id
-              }))
-            })
-          }
-          
-          // Show only if: (assigned OR in_progress) AND no pending revisions
-          // This automatically excludes 'revision' status orders
           return isAssignedStatus && !hasPendingRevisions
         })
+      }
       case 'completed':
         return orders.filter(o => o.status === 'completed')
-      case 'revision':
+      case 'revision': {
         // For revision tab, show items that have pending revision requests assigned to this editor
-        // Regardless of the overall order status
+        // Also include unassigned revisions for orders/items where this editor is the effective editor
         return orders.filter(o => {
-          // Check if this item has pending revisions assigned to the current editor
-          const myPendingRevisions = o.revisions?.filter(rev => 
-            rev.status === 'pending' && rev.assigned_to === user.id
-          ) || []
-          
-          const hasPendingRevisions = myPendingRevisions.length > 0
-          
-          // Debug logging for revision tab
-          console.log('🔄 Debug - Revision tab filter:', {
-            orderId: o.order_id,
-            status: o.status,
-            totalRevisions: o.revisions?.length || 0,
-            allPendingRevisions: o.revisions?.filter(rev => rev.status === 'pending').length || 0,
-            myPendingRevisions: myPendingRevisions.length,
-            currentEditor: user.id,
-            revisionDetails: o.revisions?.map(rev => ({
-              id: rev.id,
-              status: rev.status,
-              assigned_to: rev.assigned_to,
-              is_mine: rev.assigned_to === user.id
-            })),
-            willShow: hasPendingRevisions
-          })
-          
-          return hasPendingRevisions
+          const myPendingRevisions = o.revisions?.filter(rev => {
+            if (rev.status !== 'pending') return false
+            
+            // If revision is specifically assigned to this editor
+            if (rev.assigned_to === user.id) return true
+            
+            // If revision is unassigned but this editor is the effective editor for the order item
+            if (!rev.assigned_to) {
+              const effectiveEditor = o.assigned_editor || o.orders?.assigned_editor
+              return effectiveEditor === user.id
+            }
+            
+            return false
+          }) || []
+          return myPendingRevisions.length > 0
         })
+      }
       default:
         return orders
     }
-  }
+  }, [orders, activeTab, user.id])
+
+  // Memoized stats calculations
+  const stats = useMemo(() => {
+    const assignedCount = orders.filter(o => {
+      const isAssignedStatus = ['assigned', 'in_progress'].includes(o.status)
+      const hasPendingRevisions = o.revisions?.some(rev => rev.status === 'pending')
+      return isAssignedStatus && !hasPendingRevisions
+    }).length
+
+    const inProgressCount = orders.filter(o => o.status === 'in_progress').length
+    const completedCount = orders.filter(o => o.status === 'completed').length
+    const pendingRevisionsCount = orders.filter(o => {
+      const myPendingRevisions = o.revisions?.filter(rev => {
+        if (rev.status !== 'pending') return false
+        
+        // If revision is specifically assigned to this editor
+        if (rev.assigned_to === user.id) return true
+        
+        // If revision is unassigned but this editor is the effective editor for the order item
+        if (!rev.assigned_to) {
+          const effectiveEditor = o.assigned_editor || o.orders?.assigned_editor
+          return effectiveEditor === user.id
+        }
+        
+        return false
+      }) || []
+      return myPendingRevisions.length > 0
+    }).length
+
+    return { assignedCount, inProgressCount, completedCount, pendingRevisionsCount }
+  }, [orders])
 
   if (loading) {
     return (
@@ -734,11 +736,7 @@ export default function EditorDashboard() {
               <div>
                 <p className="text-xs md:text-sm font-medium text-gray-600">Total Assigned</p>
                 <p className="text-xl md:text-2xl font-bold text-gray-900">
-                  {orders.filter(o => {
-                    const isAssignedStatus = ['assigned', 'in_progress'].includes(o.status)
-                    const hasPendingRevisions = o.revisions?.some(rev => rev.status === 'pending')
-                    return isAssignedStatus && !hasPendingRevisions
-                  }).length}
+                  {stats.assignedCount}
                 </p>
               </div>
               <FileText className="h-6 w-6 md:h-8 md:w-8 text-purple-600" />
@@ -749,7 +747,7 @@ export default function EditorDashboard() {
               <div>
                 <p className="text-xs md:text-sm font-medium text-gray-600">In Progress</p>
                 <p className="text-xl md:text-2xl font-bold text-blue-600">
-                  {orders.filter(o => o.status === 'in_progress').length}
+                  {stats.inProgressCount}
                 </p>
               </div>
               <Clock className="h-6 w-6 md:h-8 md:w-8 text-blue-600" />
@@ -760,7 +758,7 @@ export default function EditorDashboard() {
               <div>
                 <p className="text-xs md:text-sm font-medium text-gray-600">Completed</p>
                 <p className="text-xl md:text-2xl font-bold text-green-600">
-                  {orders.filter(o => o.status === 'completed').length}
+                  {stats.completedCount}
                 </p>
               </div>
               <CheckCircle className="h-6 w-6 md:h-8 md:w-8 text-green-600" />
@@ -771,7 +769,7 @@ export default function EditorDashboard() {
               <div>
                 <p className="text-xs md:text-sm font-medium text-gray-600">Pending Revisions</p>
                 <p className="text-xl md:text-2xl font-bold text-orange-600">
-                  {orders.filter(o => o.revisions?.some(rev => rev.status === 'pending')).length}
+                  {stats.pendingRevisionsCount}
                 </p>
               </div>
               <RefreshCw className="h-6 w-6 md:h-8 md:w-8 text-orange-600" />
@@ -792,11 +790,7 @@ export default function EditorDashboard() {
                 }`}
               >
                 <span className="block sm:inline">Assigned Orders</span>
-                <span className="block sm:inline sm:ml-1">({orders.filter(o => {
-                  const isAssignedStatus = ['assigned', 'in_progress'].includes(o.status)
-                  const hasPendingRevisions = o.revisions?.some(rev => rev.status === 'pending')
-                  return isAssignedStatus && !hasPendingRevisions
-                }).length})</span>
+                <span className="block sm:inline sm:ml-1">({stats.assignedCount})</span>
               </button>
               <button
                 onClick={() => setActiveTab('completed')}
@@ -807,7 +801,7 @@ export default function EditorDashboard() {
                 }`}
               >
                 <span className="block sm:inline">Completed</span>
-                <span className="block sm:inline sm:ml-1">({orders.filter(o => o.status === 'completed').length})</span>
+                <span className="block sm:inline sm:ml-1">({stats.completedCount})</span>
               </button>
               <button
                 onClick={() => setActiveTab('revision')}
@@ -818,12 +812,12 @@ export default function EditorDashboard() {
                 }`}
               >
                 <span className="block sm:inline">Pending Revisions</span>
-                <span className="block sm:inline sm:ml-1">({orders.filter(o => o.revisions?.some(rev => rev.status === 'pending')).length})</span>
+                <span className="block sm:inline sm:ml-1">({stats.pendingRevisionsCount})</span>
               </button>
             </nav>
           </div>
         
-        {getFilteredOrders().length === 0 ? (
+        {filteredOrders.length === 0 ? (
           <div className="p-6 md:p-8 text-center">
             <ImageIcon className="h-12 w-12 md:h-16 md:w-16 text-gray-400 mx-auto mb-4" />
             <h3 className="text-lg font-medium text-gray-900 mb-2">
@@ -842,7 +836,7 @@ export default function EditorDashboard() {
             {/* Mobile Card Layout */}
             <div className="block lg:hidden">
               <div className="divide-y divide-gray-200">
-                {getFilteredOrders().map((orderItem) => (
+                {filteredOrders.map((orderItem) => (
                   <div key={orderItem.id} className="p-4 space-y-4">
                     {/* Order Header */}
                     <div className="flex items-start justify-between">
@@ -1046,7 +1040,7 @@ export default function EditorDashboard() {
                 </tr>
               </thead>
               <tbody className="bg-white divide-y divide-gray-200">
-                {getFilteredOrders().map((orderItem) => (
+                {filteredOrders.map((orderItem) => (
                   <tr key={orderItem.id} className="hover:bg-gray-50">
                     {/* Order Info */}
                     <td className="px-6 py-4 whitespace-nowrap">

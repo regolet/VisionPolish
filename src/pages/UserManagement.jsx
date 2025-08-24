@@ -135,17 +135,16 @@ export default function UserManagement() {
 
   const handleUpdateUser = async () => {
     try {
-      const { error } = await supabase
-        .from('profiles')
-        .update({
-          full_name: formData.full_name,
-          phone: formData.phone,
-          role: formData.role,
-          department: formData.department,
-          is_active: formData.is_active,
-          updated_at: new Date().toISOString()
+      // Use admin RPC function to update profile (bypasses RLS)
+      const { data, error } = await supabase
+        .rpc('admin_update_user_profile', {
+          user_id: editingUser.id,
+          user_full_name: formData.full_name,
+          user_phone: formData.phone,
+          user_role: formData.role,
+          user_department: formData.department,
+          user_is_active: formData.is_active
         })
-        .eq('id', editingUser.id)
 
       if (error) throw error
 
@@ -154,7 +153,7 @@ export default function UserManagement() {
       alert('User updated successfully!')
     } catch (error) {
       console.error('Error updating user:', error)
-      alert('Error updating user')
+      alert(error.message || 'Error updating user')
     }
   }
 
@@ -169,14 +168,12 @@ export default function UserManagement() {
     }
 
     try {
-      // We can't delete auth users from client, so we'll deactivate them
-      const { error } = await supabase
-        .from('profiles')
-        .update({ 
-          is_active: false,
-          updated_at: new Date().toISOString()
+      // Use admin RPC function to deactivate user (bypasses RLS)
+      const { data, error } = await supabase
+        .rpc('admin_update_user_profile', {
+          user_id: userId,
+          user_is_active: false
         })
-        .eq('id', userId)
       
       if (error) throw error
 
@@ -184,7 +181,7 @@ export default function UserManagement() {
       alert('User deactivated successfully!')
     } catch (error) {
       console.error('Error deactivating user:', error)
-      alert('Error deactivating user')
+      alert(error.message || 'Error deactivating user')
     }
   }
 

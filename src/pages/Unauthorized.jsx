@@ -4,7 +4,7 @@ import { useAuth } from '../contexts/AuthContext'
 
 export default function Unauthorized() {
   const navigate = useNavigate()
-  const { user, profile, signOut } = useAuth()
+  const { user, profile, signOut, forceSignOut } = useAuth()
 
   const handleGoBack = () => {
     navigate(-1)
@@ -15,8 +15,24 @@ export default function Unauthorized() {
   }
 
   const handleSignOut = async () => {
-    await signOut()
-    navigate('/login')
+    try {
+      console.log('🚪 Unauthorized: Starting sign out...')
+      const result = await signOut()
+      
+      if (result?.error) {
+        console.error('❌ Unauthorized: SignOut returned error, trying force signout:', result.error)
+        forceSignOut()
+      }
+      
+      console.log('✅ Unauthorized: Navigating to login page')
+      navigate('/login')
+    } catch (error) {
+      console.error('❌ Unauthorized: SignOut exception, using force signout:', error)
+      // If normal signout fails, force clear everything
+      forceSignOut()
+      // Force navigation regardless of errors
+      navigate('/login')
+    }
   }
 
   return (

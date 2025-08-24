@@ -1,356 +1,208 @@
 import { useState, useEffect } from 'react'
-import { useNavigate } from 'react-router-dom'
-import { useNotification } from '../contexts/NotificationContext'
 import { useAuth } from '../contexts/AuthContext'
+import { useNotification } from '../contexts/NotificationContext'
 import { supabase } from '../lib/supabase'
-import { Clock, CheckCircle, Package, Image, Download, Eye, X, ZoomIn, RefreshCw } from 'lucide-react'
+import { 
+  Package, 
+  Clock, 
+  CheckCircle, 
+  AlertCircle,
+  Image,
+  Download,
+  RefreshCw,
+  Calendar,
+  ChevronDown,
+  ChevronUp,
+  Edit3
+} from 'lucide-react'
 
 export default function Orders() {
-  const { showSuccess, showInfo } = useNotification()
-  const { user, loading: authLoading } = useAuth()
-  const [orders, setOrders] = useState([])
+  const { user } = useAuth()
+  const { showSuccess, showError } = useNotification()
+  const [orderItems, setOrderItems] = useState([])
   const [loading, setLoading] = useState(true)
-  const [selectedOrder, setSelectedOrder] = useState(null)
-  const [showOrderModal, setShowOrderModal] = useState(false)
-  const [previewImage, setPreviewImage] = useState(null)
-  const [imageInfo, setImageInfo] = useState(null)
-  const [revisionMode, setRevisionMode] = useState({})
+  const [expandedItems, setExpandedItems] = useState({})
+  const [processingRevision, setProcessingRevision] = useState({})
   const [revisionNotes, setRevisionNotes] = useState({})
-  const [lastCheckedRevisions, setLastCheckedRevisions] = useState(new Map())
-  const navigate = useNavigate()
-
-  // Function to download a single image
-  const downloadImage = async (imageUrl, filename) => {
-    try {
-      const response = await fetch(imageUrl)
-      const blob = await response.blob()
-      const url = window.URL.createObjectURL(blob)
-      const link = document.createElement('a')
-      link.href = url
-      link.download = filename || 'image'
-      document.body.appendChild(link)
-      link.click()
-      document.body.removeChild(link)
-      window.URL.revokeObjectURL(url)
-    } catch (error) {
-      console.error('Error downloading image:', error)
-    }
-  }
-
-  // Function to download all completed images from an order
-  const downloadAllOrderImages = async (order) => {
-    try {
-      const imagesToDownload = []
-      
-      // Collect all completed/edited images
-      order.order_items?.forEach((item, itemIndex) => {
-        // Get original images
-        item.specifications?.photos?.forEach((photo, photoIndex) => {
-          imagesToDownload.push({
-            url: getImageUrl(photo.url),
-            filename: `${order.order_number}_item${itemIndex + 1}_original_${photoIndex + 1}_${photo.filename || 'image.jpg'}`
-          })
-        })
-        
-        // Get latest edited images (either from revisions or main edited images)
-        item.specifications?.photos?.forEach((photo, photoIndex) => {
-          let latestEditedImage = null
-          
-          // Check for completed revisions with images
-          const revisions = item.revisions || []
-          const completedRevisionsWithImages = revisions
-            .filter(rev => rev.status === 'completed' && rev.revision_images?.length > 0)
-            .sort((a, b) => new Date(b.completed_at) - new Date(a.completed_at))
-          
-          if (completedRevisionsWithImages.length > 0 && completedRevisionsWithImages[0].revision_images?.[photoIndex]) {
-            // Use the latest revision image
-            const revisionImage = completedRevisionsWithImages[0].revision_images[photoIndex]
-            latestEditedImage = {
-              url: revisionImage.image_url,
-              filename: `${order.order_number}_item${itemIndex + 1}_edited_${photoIndex + 1}_${revisionImage.filename || 'edited.jpg'}`
-            }
-          } else if (item.specifications?.editedImages?.[photoIndex]) {
-            // Use the main edited image
-            const editedImg = item.specifications.editedImages[photoIndex]
-            latestEditedImage = {
-              url: getEditedImageUrl(editedImg),
-              filename: `${order.order_number}_item${itemIndex + 1}_edited_${photoIndex + 1}_${editedImg.filename || 'edited.jpg'}`
-            }
-          }
-          
-          if (latestEditedImage) {
-            imagesToDownload.push(latestEditedImage)
-          }
-        })
-      })
-      
-      // Download all images
-      for (const image of imagesToDownload) {
-        await downloadImage(image.url, image.filename)
-        // Add small delay between downloads
-        await new Promise(resolve => setTimeout(resolve, 500))
-      }
-      
-    } catch (error) {
-      console.error('Error downloading order images:', error)
-    }
-  }
 
   useEffect(() => {
-    if (user && !authLoading) {
-      fetchOrders(true) // Show loading spinner on initial load
-      
-      // Set up periodic refresh to check for completed revisions
-      const interval = setInterval(() => {
-        fetchOrders(false) // Don't show spinner for background updates
-      }, 15000) // Check every 15 seconds for faster updates
-      
+    if (user) {
+      fetchOrderItems()
+      // Refresh every 30 seconds
+      const interval = setInterval(fetchOrderItems, 30000)
       return () => clearInterval(interval)
     }
-  }, [user, authLoading])
+  }, [user])
 
-
-
-  const fetchOrders = async (showLoadingSpinner = false) => {
-    if (showLoadingSpinner) {
-      setLoading(true)
-    }
-    
+  const fetchOrderItems = async () => {
     try {
-      // First get orders with order items
-      const { data: ordersData, error: ordersError } = await supabase
-        .from('orders')
+      // Fetch all order items for the user with related data
+      const { data, error } = await supabase
+        .from('order_items')
         .select(`
           *,
-          order_items (
-            *,
-            service:services (*)
+          order:orders!inner(
+            id,
+            order_number,
+            created_at,
+            status,
+            user_id,
+            payment_status
+          ),
+          service:services(*),
+          revisions(
+            id,
+            status,
+            notes,
+            requested_at,
+            completed_at,
+            assigned_to,
+            revision_images(*)
           )
         `)
-        .eq('user_id', user.id)
+        .eq('order.user_id', user.id)
         .order('created_at', { ascending: false })
 
-      if (ordersError) {
-        throw ordersError
+      if (error) {
+        console.error('Error fetching order items:', error)
+        showError('Failed to load your orders')
+        return
       }
 
-      // Then get revisions for all order items
-      const orderItemIds = ordersData.flatMap(order => 
-        order.order_items?.map(item => item.id) || []
-      )
-
-      let revisionsData = []
-      if (orderItemIds.length > 0) {
-        const { data: revisions, error: revisionsError } = await supabase
-          .from('revisions')
-          .select(`
-            *,
-            revision_images (
-              id,
-              image_url,
-              filename,
-              file_size,
-              uploaded_at
-            )
-          `)
-          .in('order_item_id', orderItemIds)
-          .order('created_at', { ascending: false })
-
-        if (revisionsError) {
-          console.error('Error fetching revisions:', revisionsError)
-        } else {
-          revisionsData = revisions || []
+      // Process items to determine their effective status
+      const processedItems = data.map(item => {
+        // Determine item status based on edited images and revisions
+        let itemStatus = item.order.status
+        
+        // If item has edited images, it's at least completed
+        if (item.specifications?.editedImages?.length > 0) {
+          itemStatus = 'completed'
         }
-      }
-
-      // Attach revisions to order items
-      const ordersWithRevisions = ordersData.map(order => ({
-        ...order,
-        order_items: order.order_items?.map(item => ({
+        
+        // Check for active revisions
+        const activeRevision = item.revisions?.find(r => r.status === 'pending')
+        if (activeRevision) {
+          itemStatus = 'revision'
+        }
+        
+        // Get latest completed revision for display
+        const completedRevisions = item.revisions?.filter(r => r.status === 'completed') || []
+        const latestRevision = completedRevisions.sort((a, b) => 
+          new Date(b.completed_at) - new Date(a.completed_at)
+        )[0]
+        
+        return {
           ...item,
-          revisions: revisionsData.filter(rev => rev.order_item_id === item.id)
-        })) || []
-      }))
+          itemStatus,
+          activeRevision,
+          latestRevision,
+          hasEditedImages: item.specifications?.editedImages?.length > 0
+        }
+      })
 
-
-      
-      // Check for newly completed revisions and show notifications
-      checkForNewCompletedRevisions(ordersWithRevisions)
-      
-      // Check if any orders need status updates (revision -> completed)
-      await checkAndUpdateOrderStatuses(ordersWithRevisions)
-      
-      // Fix any unassigned revisions
-      await fixUnassignedRevisions(ordersWithRevisions)
-      
-      setOrders(ordersWithRevisions)
-
+      setOrderItems(processedItems)
     } catch (error) {
-      console.error('Error in fetchOrders:', error)
+      console.error('Error:', error)
+      showError('An error occurred while loading orders')
     } finally {
-      if (showLoadingSpinner) {
-        setLoading(false)
-      }
+      setLoading(false)
     }
   }
 
-  const refreshOrders = () => {
-    fetchOrders(true)
+  const toggleItemExpanded = (itemId) => {
+    setExpandedItems(prev => ({
+      ...prev,
+      [itemId]: !prev[itemId]
+    }))
   }
 
-  const checkForNewCompletedRevisions = (newOrders) => {
-    newOrders.forEach(order => {
-      order.order_items?.forEach(item => {
-        const revisions = item.revisions || []
-        const completedRevisions = revisions.filter(rev => rev.status === 'completed')
-        
-        completedRevisions.forEach(revision => {
-          const revisionKey = `${item.id}-${revision.id}`
-          const lastChecked = lastCheckedRevisions.get(revisionKey)
-          
-          // If this is a newly completed revision (not seen before)
-          if (!lastChecked && revision.completed_at) {
-            const completedTime = new Date(revision.completed_at)
-            const now = new Date()
-            const timeDiff = now - completedTime
-            
-            // Only show notification if completed within the last 10 minutes
-            if (timeDiff < 10 * 60 * 1000) { // 10 minutes
-              showInfo(`✅ Your revision for Order #${order.order_number || order.id} has been completed!`, 8000)
-              
-              // Update the tracking map
-              setLastCheckedRevisions(prev => {
-                const newMap = new Map(prev)
-                newMap.set(revisionKey, completedTime)
-                return newMap
-              })
-            }
-          }
+  const requestRevision = async (itemId) => {
+    const notes = revisionNotes[itemId]?.trim()
+    
+    if (!notes) {
+      showError('Please provide revision notes')
+      return
+    }
+
+    setProcessingRevision(prev => ({ ...prev, [itemId]: true }))
+
+    try {
+      // First, get the order item to find the assigned editor
+      const { data: orderItemData, error: itemError } = await supabase
+        .from('order_items')
+        .select(`
+          assigned_editor,
+          order:orders!inner(
+            assigned_editor
+          )
+        `)
+        .eq('id', itemId)
+        .single()
+
+      if (itemError) {
+        console.error('Error fetching order item:', itemError)
+        showError('Failed to get order details')
+        return
+      }
+
+      // Determine the effective editor (item-level takes precedence over order-level)
+      const effectiveEditor = orderItemData.assigned_editor || orderItemData.order.assigned_editor
+
+      if (!effectiveEditor) {
+        showError('No editor assigned to this order. Please contact support.')
+        return
+      }
+
+      // Create revision request with proper assignment
+      const { error } = await supabase
+        .from('revisions')
+        .insert({
+          order_item_id: itemId,
+          requested_by: user.id,
+          assigned_to: effectiveEditor, // Auto-assign to the effective editor
+          status: 'pending',
+          notes,
+          requested_at: new Date().toISOString()
         })
-      })
-    })
-  }
 
-  const checkAndUpdateOrderStatuses = async (ordersData) => {
-    for (const order of ordersData) {
-      // Only check orders that are currently in 'revision' status
-      if (order.status !== 'revision') continue
+      if (error) {
+        console.error('Error creating revision:', error)
+        showError('Failed to request revision')
+        return
+      }
+
+      showSuccess('Revision request submitted successfully!')
+      setRevisionNotes(prev => ({ ...prev, [itemId]: '' }))
       
-      // Check all order items for this order
-      const allItemsRevisionsCompleted = order.order_items?.every(item => {
-        const revisions = item.revisions || []
-        const pendingRevisions = revisions.filter(rev => rev.status === 'pending')
-        
-        // If there are no pending revisions for this item, it's completed
-        return pendingRevisions.length === 0
-      })
-      
-      // If all items have no pending revisions, update order status to completed
-      if (allItemsRevisionsCompleted && order.order_items?.length > 0) {
-        console.log('🔄 Updating order status from revision to completed:', {
-          orderId: order.id,
-          orderNumber: order.order_number
-        })
-        
-        const { error } = await supabase
-          .from('orders')
-          .update({ 
-            status: 'completed',
-            updated_at: new Date().toISOString()
-          })
-          .eq('id', order.id)
-
-        if (error) {
-          console.error('Error updating order status:', error)
-        } else {
-          // Update the local order object so UI reflects the change immediately
-          order.status = 'completed'
-
-        }
-      }
+      // Refresh data
+      await fetchOrderItems()
+    } catch (error) {
+      console.error('Error:', error)
+      showError('An error occurred')
+    } finally {
+      setProcessingRevision(prev => ({ ...prev, [itemId]: false }))
     }
   }
 
-  const fixUnassignedRevisions = async (ordersData) => {
-    for (const order of ordersData) {
-      for (const item of order.order_items || []) {
-        const unassignedRevisions = item.revisions?.filter(rev => 
-          rev.status === 'pending' && !rev.assigned_to
-        ) || []
-        
-        if (unassignedRevisions.length > 0 && order.assigned_editor) {
-          console.log('🔧 Fixing unassigned revisions:', {
-            orderId: order.id,
-            orderNumber: order.order_number,
-            unassignedCount: unassignedRevisions.length,
-            assigningTo: order.assigned_editor
-          })
-          
-          const revisionIds = unassignedRevisions.map(rev => rev.id)
-          
-          const { error } = await supabase
-            .from('revisions')
-            .update({ 
-              assigned_to: order.assigned_editor,
-              updated_at: new Date().toISOString()
-            })
-            .in('id', revisionIds)
-
-          if (error) {
-            console.error('Error fixing unassigned revisions:', error)
-          } else {
-            // Update local data
-            unassignedRevisions.forEach(rev => {
-              rev.assigned_to = order.assigned_editor
-            })
-
-          }
-        }
-      }
+  const getStatusBadge = (status) => {
+    const badges = {
+      pending: { color: 'bg-yellow-100 text-yellow-800', icon: Clock, text: 'Pending' },
+      assigned: { color: 'bg-blue-100 text-blue-800', icon: Package, text: 'Assigned' },
+      in_progress: { color: 'bg-indigo-100 text-indigo-800', icon: Clock, text: 'In Progress' },
+      completed: { color: 'bg-green-100 text-green-800', icon: CheckCircle, text: 'Completed' },
+      revision: { color: 'bg-orange-100 text-orange-800', icon: Edit3, text: 'In Revision' },
+      processing: { color: 'bg-purple-100 text-purple-800', icon: Clock, text: 'Processing' }
     }
-  }
-
-  const getStatusIcon = (status) => {
-    switch (status) {
-      case 'pending':
-        return <Clock className="h-5 w-5 text-yellow-500" />
-      case 'processing':
-      case 'assigned':
-      case 'in_progress':
-        return <Package className="h-5 w-5 text-blue-500" />
-      case 'completed':
-        return <CheckCircle className="h-5 w-5 text-green-500" />
-      case 'revision':
-        return <RefreshCw className="h-5 w-5 text-orange-500" />
-      default:
-        return <Clock className="h-5 w-5 text-gray-500" />
-    }
-  }
-
-  const getStatusColor = (status) => {
-    switch (status) {
-      case 'pending':
-        return 'bg-yellow-100 text-yellow-800'
-      case 'processing':
-      case 'assigned':
-      case 'in_progress':
-        return 'bg-blue-100 text-blue-800'
-      case 'completed':
-        return 'bg-green-100 text-green-800'
-      case 'revision':
-        return 'bg-orange-100 text-orange-800'
-      default:
-        return 'bg-gray-100 text-gray-800'
-    }
-  }
-
-  const getTotalImages = (order) => {
-    return order.order_items?.reduce((total, item) => {
-      if (item.specifications?.photos) {
-        return total + item.specifications.photos.length
-      }
-      return total + item.quantity
-    }, 0) || 0
+    
+    const badge = badges[status] || badges.pending
+    const Icon = badge.icon
+    
+    return (
+      <span className={`inline-flex items-center px-3 py-1 rounded-full text-sm font-medium ${badge.color}`}>
+        <Icon className="w-4 h-4 mr-1.5" />
+        {badge.text}
+      </span>
+    )
   }
 
   const getImageUrl = (imagePath) => {
@@ -363,9 +215,10 @@ export default function Orders() {
     
     // Use Supabase Storage to get public URL
     try {
-      return supabase.storage.from('uploads').getPublicUrl(imagePath).data.publicUrl
+      const url = supabase.storage.from('uploads').getPublicUrl(imagePath).data.publicUrl
+      return url
     } catch (error) {
-      console.warn('Error getting image URL:', error)
+      console.error('Error getting image URL:', error)
       return null
     }
   }
@@ -384,203 +237,78 @@ export default function Orders() {
         path = path.substring(7) // Remove 'images/' prefix
       }
       
-      // Ensure path starts with 'edited/' for edited images
+      // Add edited/ prefix if not present
       if (!path.startsWith('edited/')) {
         path = `edited/${path}`
       }
       
-      // Generate URL from uploads bucket
-      const { data } = supabase.storage.from('uploads').getPublicUrl(path)
-      return data.publicUrl
+      return supabase.storage.from('uploads').getPublicUrl(path).data.publicUrl
     }
-    
-    // Fallback to stored publicUrl if available (for legacy images)
-    if (editedImage.publicUrl) {
-      return editedImage.publicUrl
-    }
-    
-    return null
+    return editedImage.url || null
   }
 
-  const openOrderModal = (order) => {
-    setSelectedOrder(order)
-    setShowOrderModal(true)
+  const canRequestRevision = (item) => {
+    // Can request revision if item has edited images and no pending revision
+    return item.hasEditedImages && !item.activeRevision
   }
 
-  const closeOrderModal = () => {
-    setSelectedOrder(null)
-    setShowOrderModal(false)
-  }
+  const getDisplayImages = (item) => {
+    const allImages = []
+    let primaryLabel = 'Images'
+    let showRevisionBadge = false
 
-  const openImagePreview = (imageUrl, filename, isEdited = false) => {
-    if (!imageUrl) {
-      return
-    }
-    setPreviewImage({
-      url: imageUrl,
-      filename: filename || 'Unknown image',
-      isEdited: isEdited
-    })
-  }
-
-  const toggleRevisionMode = (orderItemId) => {
-    setRevisionMode(prev => ({
-      ...prev,
-      [orderItemId]: !prev[orderItemId]
-    }))
-    
-    // Clear notes when closing revision mode
-    if (revisionMode[orderItemId]) {
-      setRevisionNotes(prev => ({
-        ...prev,
-        [orderItemId]: ''
+    // Always include original images first if available
+    if (item.specifications?.photos?.length > 0) {
+      const originalImages = item.specifications.photos.map(img => ({
+        url: getImageUrl(img.url),
+        type: 'original',
+        filename: img.filename,
+        label: 'Original'
       }))
+      allImages.push(...originalImages)
+    }
+
+    // Then add latest processed images (revision takes priority over edited)
+    if (item.latestRevision?.revision_images?.length > 0) {
+      const revisionImages = item.latestRevision.revision_images.map(img => {
+        let imageUrl = img.image_url
+        
+        // If the image_url doesn't start with http, it's a storage path
+        if (imageUrl && !imageUrl.startsWith('http')) {
+          imageUrl = getImageUrl(imageUrl)
+        }
+        
+        return {
+          url: imageUrl,
+          type: 'revision',
+          uploadedAt: img.uploaded_at,
+          label: 'Revised'
+        }
+      })
+      allImages.push(...revisionImages)
+      primaryLabel = 'Before & After (Latest Revision)'
+      showRevisionBadge = true
+    } else if (item.specifications?.editedImages?.length > 0) {
+      const editedImages = item.specifications.editedImages.map(img => ({
+        url: getEditedImageUrl(img),
+        type: 'edited',
+        uploadedAt: img.uploadedAt,
+        label: 'Edited'
+      }))
+      allImages.push(...editedImages)
+      primaryLabel = 'Before & After'
+    } else if (allImages.length > 0) {
+      primaryLabel = 'Original Images'
+    }
+
+    return {
+      images: allImages,
+      label: primaryLabel,
+      showRevisionBadge
     }
   }
 
-  const updateRevisionNotes = (orderItemId, notes) => {
-    setRevisionNotes(prev => ({
-      ...prev,
-      [orderItemId]: notes
-    }))
-  }
-
-  const requestRevision = async (orderId, orderItemId) => {
-    try {
-
-      
-      const notes = revisionNotes[orderItemId] || ''
-      
-      // Get the effective editor for this order item (item-level or order-level)
-      const { data: itemData, error: itemFetchError } = await supabase
-        .from('order_items')
-        .select(`
-          id,
-          assigned_editor,
-          orders!inner(assigned_editor)
-        `)
-        .eq('id', orderItemId)
-        .single()
-      
-      if (itemFetchError) {
-        throw itemFetchError
-      }
-      
-      // Use item-level editor if available, otherwise fall back to order-level editor
-      const effectiveEditor = itemData.assigned_editor || itemData.orders.assigned_editor
-      
-      if (!effectiveEditor) {
-        throw new Error('No editor assigned to this order or item')
-      }
-      
-      // Create revision in the dedicated revisions table
-      const { data: newRevision, error: revisionError } = await supabase
-        .from('revisions')
-        .insert({
-          order_item_id: orderItemId,
-          requested_by: user.id,
-          assigned_to: effectiveEditor, // Auto-assign to the effective editor
-          notes: notes,
-          status: 'pending',
-          requested_at: new Date().toISOString()
-        })
-        .select()
-        .single()
-      
-      if (revisionError) {
-        throw revisionError
-      }
-      
-
-      
-      // Update order status to revision
-      const { error: orderError } = await supabase
-        .from('orders')
-        .update({ 
-          status: 'revision',
-          updated_at: new Date().toISOString()
-        })
-        .eq('id', orderId)
-      
-      if (orderError) {
-        throw orderError
-      }
-      
-      // Clear form and close revision mode
-      setRevisionMode(prev => ({ ...prev, [orderItemId]: false }))
-      setRevisionNotes(prev => ({ ...prev, [orderItemId]: '' }))
-      
-      // Immediately update the local order status to show the change
-      setOrders(prevOrders => 
-        prevOrders.map(order => 
-          order.id === orderId 
-            ? { 
-                ...order, 
-                status: 'revision',
-                order_items: order.order_items.map(item =>
-                  item.id === orderItemId
-                    ? {
-                        ...item,
-                        revisions: [
-                          {
-                            ...newRevision,
-                            revision_images: []
-                          },
-                          ...(item.revisions || [])
-                        ]
-                      }
-                    : item
-                )
-              }
-            : order
-        )
-      )
-      
-      showSuccess('Revision request submitted successfully! The editor will be notified.')
-      
-      // Refresh orders in background to ensure data consistency
-      fetchOrders(false)
-      
-    } catch (error) {
-      console.error('❌ Error requesting revision:', error)
-      showError('Failed to submit revision request. Please try again.')
-    }
-  }
-
-  const getLatestRevision = (item) => {
-    const revisions = item.revisions || []
-    if (revisions.length === 0) return null
-    
-    // Get the most recent revision (they're already sorted by created_at DESC)
-    return revisions[0]
-  }
-
-  const getRevisionHistory = (item) => {
-    return item.revisions || []
-  }
-
-  const canRequestRevision = (order, item) => {
-    // Can request revision if order is completed or in revision status and has edited images
-    if (!['completed', 'revision'].includes(order.status) || !item.specifications?.editedImages?.length) {
-      return false
-    }
-    
-    // Check if there's a pending revision
-    const latestRevision = getLatestRevision(item)
-    if (latestRevision && latestRevision.status === 'pending') {
-      return false // Already has pending revision
-    }
-    
-    return true
-  }
-
-  const closeImagePreview = () => {
-    setPreviewImage(null)
-    setImageInfo(null)
-  }
-
-  // Show loading while auth is loading or while fetching orders
-  if (authLoading || loading) {
+  if (loading) {
     return (
       <div className="min-h-screen flex items-center justify-center">
         <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-purple-600"></div>
@@ -588,841 +316,240 @@ export default function Orders() {
     )
   }
 
-  return (
-    <div className="bg-gray-50 min-h-screen py-8 md:py-12">
-      <div className="container mx-auto px-4">
-        <div className="mb-6 md:mb-8">
-          <div className="flex flex-col space-y-4 sm:flex-row sm:justify-between sm:items-center sm:space-y-0">
-            <div>
-              <h1 className="text-2xl md:text-3xl font-bold text-gray-900">My Orders</h1>
-              <p className="text-gray-600 mt-1 md:mt-2 text-sm md:text-base">Track and manage your photo editing orders</p>
-            </div>
-            <button
-              onClick={refreshOrders}
-              className="flex items-center justify-center space-x-2 px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors text-sm md:text-base"
-              title="Refresh orders to check for updates"
-            >
-              <RefreshCw className="h-4 w-4" />
-              <span className="hidden sm:inline">Refresh</span>
-            </button>
+  if (orderItems.length === 0) {
+    return (
+      <div className="min-h-screen bg-gray-50 py-12">
+        <div className="container mx-auto px-4">
+          <div className="text-center py-12">
+            <Package className="mx-auto h-12 w-12 text-gray-400 mb-4" />
+            <h2 className="text-2xl font-semibold text-gray-900 mb-2">No Orders Yet</h2>
+            <p className="text-gray-600">Your photo editing orders will appear here</p>
           </div>
         </div>
+      </div>
+    )
+  }
 
-        {orders.length === 0 ? (
-          <div className="bg-white rounded-lg shadow-md p-8 md:p-12 text-center">
-            <Package className="h-12 w-12 md:h-16 md:w-16 text-gray-300 mx-auto mb-4" />
-            <h2 className="text-xl md:text-2xl font-semibold mb-2">No orders yet</h2>
-            <p className="text-gray-600 mb-6 md:mb-8 text-sm md:text-base">
-              You haven't placed any orders yet. Start by browsing our services!
-            </p>
-            <button
-              onClick={() => navigate('/services')}
-              className="bg-purple-600 text-white px-6 py-3 rounded-lg hover:bg-purple-700 transition text-sm md:text-base"
-            >
-              Browse Services
-            </button>
-          </div>
-        ) : (
-          <div className="space-y-4 md:space-y-6">
-            {orders.map((order) => (
-              <div key={order.id} className="bg-white rounded-lg shadow-md p-4 md:p-6">
-                <div className="flex flex-col space-y-4 lg:flex-row lg:items-center lg:justify-between lg:space-y-0 mb-4">
-                  <div className="min-w-0 flex-1">
-                    <div className="flex flex-col sm:flex-row sm:items-center sm:space-x-3 mb-2">
-                      <h3 className="text-lg md:text-xl font-semibold text-gray-900 truncate">
-                        Order #{order.order_number}
-                      </h3>
-                      <span className={`inline-flex items-center px-2 md:px-3 py-1 rounded-full text-xs md:text-sm font-medium w-fit ${getStatusColor(order.status)}`}>
-                        {getStatusIcon(order.status)}
-                        <span className="ml-1 md:ml-2 capitalize">{order.status}</span>
-                      </span>
-                    </div>
-                    <p className="text-xs md:text-sm text-gray-600">
-                      Placed on {new Date(order.created_at).toLocaleDateString('en-US', {
-                        weekday: 'long',
-                        year: 'numeric',
-                        month: 'long',
-                        day: 'numeric'
-                      })}
-                    </p>
-                  </div>
-                  <div className="flex flex-col sm:flex-row sm:items-center gap-4">
-                    <div className="text-center sm:text-right">
-                      <p className="text-lg md:text-xl font-bold text-purple-600">${order.total_amount}</p>
-                      <p className="text-xs md:text-sm text-gray-500">{getTotalImages(order)} images</p>
+  return (
+    <div className="min-h-screen bg-gray-50 py-8">
+      <div className="container mx-auto px-4 max-w-6xl">
+        <h1 className="text-3xl font-bold mb-8">Your Orders</h1>
+        
+        <div className="space-y-4">
+          {orderItems.map((item) => {
+            const isExpanded = expandedItems[item.id]
+            const displayData = getDisplayImages(item)
+            
+            return (
+              <div key={item.id} className="bg-white rounded-lg shadow-sm border border-gray-200 overflow-hidden">
+                {/* Item Header */}
+                <div className="p-4 sm:p-6">
+                  <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+                    <div className="flex-1">
+                      <div className="flex items-center gap-3 mb-2">
+                        <h3 className="text-lg font-semibold text-gray-900">
+                          {item.service?.name}
+                        </h3>
+                        {getStatusBadge(item.itemStatus)}
+                      </div>
+                      
+                      <div className="flex flex-wrap items-center gap-4 text-sm text-gray-600">
+                        <span className="flex items-center">
+                          <Package className="w-4 h-4 mr-1" />
+                          Order #{item.order.order_number}
+                        </span>
+                        <span className="flex items-center">
+                          <Calendar className="w-4 h-4 mr-1" />
+                          {new Date(item.order.created_at).toLocaleDateString()}
+                        </span>
+                        <span className="flex items-center">
+                          <Image className="w-4 h-4 mr-1" />
+                          {item.quantity} {item.quantity === 1 ? 'image' : 'images'}
+                        </span>
+                      </div>
+                      
+                      {item.specifications?.notes && (
+                        <p className="mt-2 text-sm text-gray-600 bg-blue-50 p-2 rounded">
+                          Instructions: {item.specifications.notes}
+                        </p>
+                      )}
                     </div>
                     
-                    {/* Action Buttons */}
-                    <div className="flex flex-col sm:flex-row gap-2">
-                      <button
-                        onClick={() => openOrderModal(order)}
-                        className="flex items-center justify-center px-3 py-2 bg-purple-600 text-white rounded-lg hover:bg-purple-700 transition text-xs md:text-sm"
-                      >
-                        <Eye className="h-4 w-4 mr-1" />
-                        <span className="hidden sm:inline">View Details</span>
-                        <span className="sm:hidden">Details</span>
-                      </button>
-                      {order.status === 'completed' && (
-                        <button 
-                          onClick={() => downloadAllOrderImages(order)}
-                          className="flex items-center justify-center px-3 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 transition text-xs md:text-sm"
-                        >
-                          <Download className="h-4 w-4 mr-1" />
-                          <span className="hidden sm:inline">Download</span>
-                          <span className="sm:hidden">DL</span>
-                        </button>
-                      )}
-                    </div>
-                  </div>
-                </div>
-
-                {/* Order Items Preview */}
-                <div className="mb-4">
-                  <h4 className="text-sm font-medium text-gray-700 mb-2">Services:</h4>
-                  <div className="flex flex-wrap gap-2">
-                    {order.order_items?.map((item, index) => (
-                      <span key={index} className="bg-gray-100 text-gray-800 px-2 md:px-3 py-1 rounded-full text-xs md:text-sm">
-                        {item.service?.name} ({item.quantity})
-                      </span>
-                    ))}
-                  </div>
-                </div>
-
-                {/* Image Thumbnails Preview */}
-                {order.order_items?.some(item => 
-                  item.specifications?.photos?.length > 0 || 
-                  item.specifications?.editedImages?.length > 0
-                ) && (
-                  <div className="mb-4">
-                    <h4 className="text-sm font-medium text-gray-700 mb-3">Images:</h4>
-                    <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-6 gap-2 md:gap-4">
-                      {order.order_items?.map((item) => 
-                        item.specifications?.photos?.map((photo, photoIndex) => {
-                          // Get the latest edited image - either from latest revision or main edited images
-                          let latestEditedImage = null
-                          let isFromRevision = false
-                          
-                          // Check if there are completed revisions with images
-                          const revisions = item.revisions || []
-                          const completedRevisionsWithImages = revisions
-                            .filter(rev => rev.status === 'completed' && rev.revision_images?.length > 0)
-                            .sort((a, b) => new Date(b.completed_at) - new Date(a.completed_at))
-                          
-                          if (completedRevisionsWithImages.length > 0 && completedRevisionsWithImages[0].revision_images?.[photoIndex]) {
-                            // Use the latest revision image
-                            const revisionImage = completedRevisionsWithImages[0].revision_images[photoIndex]
-                            latestEditedImage = {
-                              url: revisionImage.image_url,
-                              filename: revisionImage.filename,
-                              size: revisionImage.file_size
-                            }
-                            isFromRevision = true
-                          } else if (item.specifications?.editedImages?.[photoIndex]) {
-                            // Use the main edited image
-                            latestEditedImage = item.specifications.editedImages[photoIndex]
-                            isFromRevision = false
-                          }
-                          
-                          return (
-                            <div key={`${item.id}-${photoIndex}`} className="flex space-x-2">
-                              {/* Original Image */}
-                              <div className="relative group">
-                                <div
-                                  className="w-32 h-40 relative cursor-pointer hover:opacity-75 transition-opacity"
-                                  onClick={(e) => {
-                                    e.preventDefault()
-                                    e.stopPropagation()
-                                    const imageUrl = getImageUrl(photo.url)
-                                    openImagePreview(imageUrl, photo.filename, false)
-                                  }}
-                                  style={{ zIndex: 1 }}
-                                >
-                                  <img
-                                    src={getImageUrl(photo.url)}
-                                    alt={photo.filename || 'Original image'}
-                                    className="w-full h-full object-cover rounded-lg border"
-                                    onError={(e) => {
-                                      e.target.style.display = 'none'
-                                      e.target.nextElementSibling.style.display = 'flex'
-                                    }}
-                                  />
-                                  <div className="w-full h-full hidden items-center justify-center bg-gray-100 rounded-lg border">
-                                    <Image className="h-8 w-8 text-gray-400" />
-                                  </div>
-                                  <div className="absolute bottom-1 left-1 bg-blue-600 text-white text-xs px-1 py-0.5 rounded pointer-events-none">
-                                    Original
-                                  </div>
-                                  <div className="absolute inset-0 bg-black bg-opacity-0 group-hover:bg-opacity-40 transition-all duration-200 rounded-lg flex items-center justify-center opacity-0 group-hover:opacity-100 pointer-events-none">
-                                    <ZoomIn className="h-8 w-8 text-white" />
-                                  </div>
-                                </div>
-                              </div>
-                              
-                              {/* Latest Edited Image */}
-                              {latestEditedImage ? (
-                                <div className="relative group">
-                                  <div
-                                    className="w-32 h-40 relative cursor-pointer hover:opacity-75 transition-opacity"
-                                    onClick={(e) => {
-                                      e.preventDefault()
-                                      e.stopPropagation()
-                                      const imageUrl = getEditedImageUrl(latestEditedImage)
-                                      openImagePreview(imageUrl, latestEditedImage.filename, true)
-                                    }}
-                                    style={{ zIndex: 1 }}
-                                  >
-                                    <img
-                                      src={getEditedImageUrl(latestEditedImage)}
-                                      alt={latestEditedImage.filename || 'Edited image'}
-                                      className="w-full h-full object-cover rounded-lg border ring-2 ring-green-500"
-                                      onError={(e) => {
-                                        e.target.style.display = 'none'
-                                        e.target.nextElementSibling.style.display = 'flex'
-                                      }}
-                                    />
-                                    <div className="w-full h-full hidden items-center justify-center bg-gray-100 rounded-lg border">
-                                      <Image className="h-8 w-8 text-gray-400" />
-                                    </div>
-                                    <div className="absolute bottom-1 left-1 bg-green-600 text-white text-xs px-1 py-0.5 rounded pointer-events-none">
-                                      {isFromRevision ? 'Latest' : 'Edited'}
-                                    </div>
-                                    {isFromRevision && (
-                                      <div className="absolute top-1 right-1 bg-orange-500 text-white text-xs px-1 py-0.5 rounded pointer-events-none">
-                                        Rev
-                                      </div>
-                                    )}
-                                    <div className="absolute inset-0 bg-black bg-opacity-0 group-hover:bg-opacity-40 transition-all duration-200 rounded-lg flex items-center justify-center opacity-0 group-hover:opacity-100 pointer-events-none">
-                                      <ZoomIn className="h-5 w-5 text-white" />
-                                    </div>
-                                  </div>
-                                </div>
-                              ) : order.status === 'completed' ? (
-                                <div className="w-32 h-40 flex items-center justify-center bg-yellow-50 rounded-lg border border-yellow-200">
-                                  <div className="text-center">
-                                    <Clock className="h-6 w-6 text-yellow-500 mx-auto mb-2" />
-                                    <span className="text-sm text-yellow-700">Processing</span>
-                                  </div>
-                                </div>
-                              ) : (
-                                <div className="w-32 h-40 flex items-center justify-center bg-gray-50 rounded-lg border border-gray-200">
-                                  <div className="text-center">
-                                    <Clock className="h-6 w-6 text-gray-400 mx-auto mb-2" />
-                                    <span className="text-sm text-gray-500">Pending</span>
-                                  </div>
-                                </div>
-                              )}
-                            </div>
-                          )
-                        })
-                      )}
-                    </div>
-                  </div>
-                )}
-
-                {/* Status Timeline */}
-                <div className="mb-4">
-                  <div className="flex items-center space-x-4 text-sm">
-                    <div className={`flex items-center ${['pending', 'processing', 'assigned', 'in_progress', 'completed', 'revision'].includes(order.status) ? 'text-green-600' : 'text-gray-400'}`}>
-                      <div className={`w-2 h-2 rounded-full mr-2 ${['pending', 'processing', 'assigned', 'in_progress', 'completed', 'revision'].includes(order.status) ? 'bg-green-600' : 'bg-gray-400'}`}></div>
-                      Order Placed
-                    </div>
-                    <div className={`flex items-center ${['processing', 'assigned', 'in_progress', 'completed', 'revision'].includes(order.status) ? 'text-green-600' : 'text-gray-400'}`}>
-                      <div className={`w-2 h-2 rounded-full mr-2 ${['processing', 'assigned', 'in_progress', 'completed', 'revision'].includes(order.status) ? 'bg-green-600' : 'bg-gray-400'}`}></div>
-                      Processing
-                    </div>
-                    <div className={`flex items-center ${order.status === 'completed' ? 'text-green-600' : order.status === 'revision' ? 'text-orange-600' : 'text-gray-400'}`}>
-                      <div className={`w-2 h-2 rounded-full mr-2 ${order.status === 'completed' ? 'bg-green-600' : order.status === 'revision' ? 'bg-orange-600' : 'bg-gray-400'}`}></div>
-                      {order.status === 'revision' ? 'Revision' : 'Completed'}
-                    </div>
-                  </div>
-                </div>
-
-              </div>
-            ))}
-          </div>
-        )}
-
-        {/* Order Details Modal */}
-        {showOrderModal && selectedOrder && (
-          <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
-            <div className="bg-white rounded-lg max-w-4xl w-full max-h-[90vh] overflow-y-auto">
-              <div className="sticky top-0 bg-white border-b border-gray-200 px-6 py-4 flex justify-between items-center">
-                <h2 className="text-2xl font-bold text-gray-900">
-                  Order #{selectedOrder.order_number}
-                </h2>
-                <button
-                  onClick={closeOrderModal}
-                  className="text-gray-400 hover:text-gray-600 transition text-2xl"
-                >
-                  ×
-                </button>
-              </div>
-
-              <div className="p-6">
-                {/* Order Summary */}
-                <div className="mb-6 p-4 bg-gray-50 rounded-lg">
-                  <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-                    <div>
-                      <p className="text-sm text-gray-600">Order Date</p>
-                      <p className="font-medium">
-                        {new Date(selectedOrder.created_at).toLocaleDateString()}
-                      </p>
-                    </div>
-                    <div>
-                      <p className="text-sm text-gray-600">Status</p>
-                      <span className={`inline-flex items-center px-2 py-1 rounded-full text-sm font-medium ${getStatusColor(selectedOrder.status)}`}>
-                        {getStatusIcon(selectedOrder.status)}
-                        <span className="ml-1 capitalize">{selectedOrder.status}</span>
-                      </span>
-                    </div>
-                    <div>
-                      <p className="text-sm text-gray-600">Total Amount</p>
-                      <p className="font-medium text-lg text-purple-600">
-                        ${selectedOrder.total_amount}
-                      </p>
-                    </div>
-                  </div>
-                </div>
-
-                {/* Order Items */}
-                <div className="space-y-6">
-                  <h3 className="text-lg font-semibold">Order Items</h3>
-                  {selectedOrder.order_items?.map((item) => (
-                    <div key={item.id} className="border border-gray-200 rounded-lg p-4">
-                      <div className="flex justify-between items-start mb-4">
-                        <div>
-                          <h4 className="text-lg font-medium">{item.service?.name}</h4>
-                          <p className="text-gray-600">{item.service?.description}</p>
-                        </div>
-                        <div className="text-right">
-                          <p className="text-lg font-semibold">
-                            ${(item.price * item.quantity).toFixed(2)}
-                          </p>
-                          <p className="text-sm text-gray-500">
-                            {item.quantity} × ${item.price}
-                          </p>
-                        </div>
-                      </div>
-
-                      {/* Before/After Photo Comparison */}
-                      {item.specifications?.photos && item.specifications.photos.length > 0 && (
-                        <div className="mb-4">
-                          <p className="text-sm font-medium text-gray-700 mb-3">
-                            Photos ({item.specifications.photos.length}):
-                          </p>
-                          <div className="space-y-4">
-                            {item.specifications.photos.map((photo, index) => {
-                              // Get the latest edited image - either from latest revision or main edited images
-                              let latestEditedImage = null
-                              let isFromRevision = false
-                              
-                              // Check if there are completed revisions with images
-                              const revisions = item.revisions || []
-                              const completedRevisionsWithImages = revisions
-                                .filter(rev => rev.status === 'completed' && rev.revision_images?.length > 0)
-                                .sort((a, b) => new Date(b.completed_at) - new Date(a.completed_at))
-                              
-                              if (completedRevisionsWithImages.length > 0 && completedRevisionsWithImages[0].revision_images?.[index]) {
-                                // Use the latest revision image
-                                const revisionImage = completedRevisionsWithImages[0].revision_images[index]
-                                latestEditedImage = {
-                                  url: revisionImage.image_url,
-                                  filename: revisionImage.filename,
-                                  size: revisionImage.file_size
-                                }
-                                isFromRevision = true
-                              } else if (item.specifications?.editedImages?.[index]) {
-                                // Use the main edited image
-                                latestEditedImage = item.specifications.editedImages[index]
-                                isFromRevision = false
-                              }
-                              
-                              return (
-                                <div key={index} className="border border-gray-200 rounded-lg p-4">
-                                  <div className="flex gap-6">
-                                    {/* Images Section - Smaller thumbnails */}
-                                    <div className="flex gap-3">
-                                      {/* Original Image */}
-                                      <div className="text-center">
-                                        <p className="text-xs font-medium text-gray-600 mb-1">Original</p>
-                                        <div className="relative">
-                                          {photo.url ? (
-                                            <div 
-                                              className="relative group cursor-pointer"
-                                              onClick={(e) => {
-                                                e.preventDefault()
-                                                e.stopPropagation()
-                                                console.log('🖱️ Modal original image clicked:', photo)
-                                                const imageUrl = getImageUrl(photo.url)
-                                                console.log('📸 Modal generated image URL:', imageUrl)
-                                                openImagePreview(imageUrl, photo.filename, false)
-                                              }}
-                                            >
-                                              <img
-                                                src={getImageUrl(photo.url)}
-                                                alt={photo.filename || 'Original image'}
-                                                className="w-24 h-24 object-cover rounded-lg border hover:opacity-75 transition-opacity"
-                                                onError={(e) => {
-                                                  e.target.style.display = 'none'
-                                                  e.target.nextSibling.style.display = 'flex'
-                                                }}
-                                              />
-                                              <div className="absolute inset-0 bg-black bg-opacity-0 group-hover:bg-opacity-40 transition-all duration-200 rounded-lg flex items-center justify-center opacity-0 group-hover:opacity-100 pointer-events-none">
-                                                <ZoomIn className="h-5 w-5 text-white" />
-                                              </div>
-                                            </div>
-                                          ) : null}
-                                          <div className="w-24 h-24 hidden items-center justify-center bg-gray-100 rounded-lg border">
-                                            <div className="text-center">
-                                              <Image className="h-6 w-6 text-gray-400" />
-                                            </div>
-                                          </div>
-                                        </div>
-                                      </div>
-                                      
-                                      {/* Latest Edited Image */}
-                                      <div className="text-center">
-                                        <p className="text-xs font-medium text-gray-600 mb-1">
-                                          {isFromRevision ? 'Latest Rev' : 'Edited'}
-                                        </p>
-                                        <div className="relative">
-                                          {latestEditedImage ? (
-                                            <>
-                                              <div 
-                                                className="relative group cursor-pointer"
-                                                onClick={(e) => {
-                                                  e.preventDefault()
-                                                  e.stopPropagation()
-                                                  console.log('🖱️ Modal edited image clicked:', latestEditedImage)
-                                                  const imageUrl = getEditedImageUrl(latestEditedImage)
-                                                  console.log('📸 Modal edited image URL:', imageUrl)
-                                                  openImagePreview(imageUrl, latestEditedImage.filename, true)
-                                                }}
-                                              >
-                                                <img
-                                                  src={getEditedImageUrl(latestEditedImage)}
-                                                  alt={latestEditedImage.filename || 'Edited image'}
-                                                  className={`w-24 h-24 object-cover rounded-lg border hover:opacity-75 transition-opacity ring-2 ${isFromRevision ? 'ring-orange-500' : 'ring-green-500'}`}
-                                                  onError={(e) => {
-                                                    e.target.style.display = 'none'
-                                                    e.target.nextSibling.style.display = 'flex'
-                                                  }}
-                                                />
-                                                <div className="absolute inset-0 bg-black bg-opacity-0 group-hover:bg-opacity-40 transition-all duration-200 rounded-lg flex items-center justify-center opacity-0 group-hover:opacity-100 pointer-events-none">
-                                                  <ZoomIn className="h-5 w-5 text-white" />
-                                                </div>
-                                                {isFromRevision && (
-                                                  <div className="absolute top-1 right-1 bg-orange-500 text-white text-xs px-1 py-0.5 rounded pointer-events-none">
-                                                    Rev
-                                                  </div>
-                                                )}
-                                              </div>
-                                              <div className="w-24 h-24 hidden items-center justify-center bg-gray-100 rounded-lg border">
-                                                <div className="text-center">
-                                                  <Image className="h-6 w-6 text-gray-400" />
-                                                </div>
-                                              </div>
-                                            </>
-                                          ) : selectedOrder.status === 'completed' ? (
-                                            <div className="w-24 h-24 flex items-center justify-center bg-yellow-50 rounded-lg border border-yellow-200">
-                                              <div className="text-center">
-                                                <Clock className="h-5 w-5 text-yellow-500" />
-                                              </div>
-                                            </div>
-                                          ) : (
-                                            <div className="w-24 h-24 flex items-center justify-center bg-gray-50 rounded-lg border border-gray-200">
-                                              <div className="text-center">
-                                                <Clock className="h-5 w-5 text-gray-400" />
-                                              </div>
-                                            </div>
-                                          )}
-                                        </div>
-                                      </div>
-                                    </div>
-
-                                    {/* Right side content - Special Instructions and Status */}
-                                    <div className="flex-1 space-y-3">
-                                      {/* Special Instructions */}
-                                      {item.specifications?.notes && (
-                                        <div className="p-3 bg-blue-50 border border-blue-200 rounded">
-                                          <p className="text-sm font-medium text-blue-800 mb-2">Special Instructions:</p>
-                                          <p className="text-sm text-blue-700">{item.specifications.notes}</p>
-                                        </div>
-                                      )}
-
-                                      {/* Latest Revision Status */}
-                                      {getLatestRevision(item) && (
-                                        <div className="p-3 bg-orange-50 border border-orange-200 rounded">
-                                          <div className="flex items-center justify-between mb-2">
-                                            <p className="text-sm font-medium text-orange-800">Latest Revision:</p>
-                                            <span className={`px-2 py-1 text-xs font-medium rounded-full ${
-                                              getLatestRevision(item).status === 'pending' 
-                                                ? 'bg-orange-100 text-orange-700'
-                                                : getLatestRevision(item).status === 'completed'
-                                                ? 'bg-green-100 text-green-700'
-                                                : 'bg-gray-100 text-gray-700'
-                                            }`}>
-                                              {getLatestRevision(item).status === 'pending' ? 'In Progress' :
-                                               getLatestRevision(item).status === 'completed' ? 'Completed' :
-                                               getLatestRevision(item).status}
-                                            </span>
-                                          </div>
-                                          <p className="text-sm text-orange-700">{getLatestRevision(item).notes}</p>
-                                          <p className="text-xs text-orange-600 mt-1">
-                                            Requested: {new Date(getLatestRevision(item).requested_at).toLocaleDateString()}
-                                            {getLatestRevision(item).completed_at && (
-                                              <span className="block text-green-600 mt-1">
-                                                ✅ Completed: {new Date(getLatestRevision(item).completed_at).toLocaleDateString()}
-                                              </span>
-                                            )}
-                                          </p>
-                                        </div>
-                                      )}
-                                    </div>
-                                  </div>
-
-                                  {/* Revision Controls - Moved below thumbnails */}
-                                  {item.specifications?.editedImages && 
-                                   item.specifications.editedImages.length > 0 && (
-                                    <div className="mt-4">
-                                      {/* Revision Textarea - Only show when in revision mode */}
-                                      {revisionMode[item.id] && canRequestRevision(selectedOrder, item) && (
-                                        <div className="mb-4 p-4 bg-orange-50 border border-orange-200 rounded-lg">
-                                          <label className="block text-sm font-medium text-orange-800 mb-2">
-                                            Revision Request Details
-                                          </label>
-                                          <textarea
-                                            value={revisionNotes[item.id] || ''}
-                                            onChange={(e) => updateRevisionNotes(item.id, e.target.value)}
-                                            placeholder="Please describe what changes you would like for this item. Be as specific as possible..."
-                                            rows={3}
-                                            className="w-full px-3 py-2 border border-orange-300 rounded-md focus:outline-none focus:ring-2 focus:ring-orange-500 focus:border-orange-500 resize-none text-sm"
-                                          />
-                                          <p className="text-xs text-orange-600 mt-1">
-                                            Describe specific changes needed
-                                          </p>
-                                        </div>
-                                      )}
-                                      
-                                      {/* Action Buttons */}
-                                      <div className="flex gap-2">
-                                            {canRequestRevision(selectedOrder, item) ? (
-                                              !revisionMode[item.id] ? (
-                                                <button
-                                                  onClick={() => toggleRevisionMode(item.id)}
-                                                  className="w-full bg-orange-600 text-white px-4 py-2 rounded-lg hover:bg-orange-700 transition flex items-center justify-center space-x-2"
-                                                >
-                                                  <RefreshCw className="h-4 w-4" />
-                                                  <span>
-                                                    {getRevisionHistory(item).length > 0 ? 'Request Another Revision' : 'Request Revision'}
-                                                  </span>
-                                                </button>
-                                              ) : (
-                                                <>
-                                                  <button
-                                                    onClick={() => toggleRevisionMode(item.id)}
-                                                    className="w-full bg-gray-600 text-white px-4 py-2 rounded-lg hover:bg-gray-700 transition"
-                                                  >
-                                                    Cancel
-                                                  </button>
-                                                  <button
-                                                    onClick={() => requestRevision(selectedOrder.id, item.id)}
-                                                    className="w-full bg-orange-600 text-white px-4 py-2 rounded-lg hover:bg-orange-700 transition flex items-center justify-center space-x-2"
-                                                  >
-                                                    <RefreshCw className="h-4 w-4" />
-                                                    <span>Submit Request</span>
-                                                  </button>
-                                                </>
-                                              )
-                                            ) : getLatestRevision(item)?.status === 'pending' ? (
-                                              <div className="text-center">
-                                                <div className="bg-yellow-100 text-yellow-800 px-4 py-2 rounded-lg">
-                                                  <div className="flex items-center justify-center space-x-2">
-                                                    <Clock className="h-4 w-4" />
-                                                    <span>Revision in Progress</span>
-                                                  </div>
-                                                </div>
-                                                <p className="text-xs text-yellow-600 mt-1">
-                                                  Editor is working on your revision
-                                                </p>
-                                              </div>
-                                            ) : selectedOrder.status === 'revision' ? (
-                                              <div className="text-center">
-                                                <div className="bg-blue-100 text-blue-800 px-4 py-2 rounded-lg">
-                                                  <div className="flex items-center justify-center space-x-2">
-                                                    <Package className="h-4 w-4" />
-                                                    <span>Under Revision</span>
-                                                  </div>
-                                                </div>
-                                                <p className="text-xs text-blue-600 mt-1">
-                                                  Processing revision requests
-                                                </p>
-                                              </div>
-                                            ) : (
-                                              <div className="flex-1">
-                                                <div className="bg-green-100 text-green-800 px-4 py-2 rounded-lg">
-                                                  <div className="flex items-center justify-center space-x-2">
-                                                    <CheckCircle className="h-4 w-4" />
-                                                    <span>Completed</span>
-                                                  </div>
-                                                </div>
-                                                <p className="text-xs text-green-600 mt-1 text-center">
-                                                  Your editing is complete
-                                                </p>
-                                              </div>
-                                            )}
-                                      </div>
-                                      
-                                      {canRequestRevision(selectedOrder, item) && (
-                                        <p className="text-xs text-gray-500 mt-2">
-                                          Request additional editing for this item
-                                        </p>
-                                      )}
-                                    </div>
-                                  )}
-                                </div>
-                              )
-                            })}
-                          </div>
-                          
-                          {/* Revision History Thumbnails */}
-                          {getRevisionHistory(item).length > 0 && (
-                            <div className="mt-4 pt-4 border-t border-gray-200">
-                              <h5 className="text-sm font-medium text-gray-700 mb-3 flex items-center">
-                                <RefreshCw className="h-4 w-4 mr-2 text-orange-600" />
-                                Revision History ({getRevisionHistory(item).length} {getRevisionHistory(item).length === 1 ? 'revision' : 'revisions'})
-                                {getRevisionHistory(item).some(r => r.status === 'pending') && (
-                                  <span className="ml-2 px-2 py-0.5 text-xs font-medium bg-yellow-100 text-yellow-700 rounded-full">
-                                    Has Pending
-                                  </span>
-                                )}
-                              </h5>
-                              <div className="space-y-3">
-                                {getRevisionHistory(item).map((revision, revIndex) => {
-                                  const revisionImages = revision.editedImages || []
-                                  return (
-                                    <div key={revision.id} className="p-3 bg-orange-50 border border-orange-100 rounded-lg">
-                                      <div className="flex items-center justify-between mb-2">
-                                        <div className="flex items-center space-x-2">
-                                          <span className="text-sm font-medium text-orange-800">
-                                            Revision #{revIndex + 1}
-                                          </span>
-                                          <span className={`px-2 py-1 text-xs font-medium rounded-full ${
-                                            revision.status === 'pending' 
-                                              ? 'bg-yellow-100 text-yellow-700'
-                                              : revision.status === 'completed'
-                                              ? 'bg-green-100 text-green-700'
-                                              : 'bg-gray-100 text-gray-700'
-                                          }`}>
-                                            {revision.status === 'pending' ? 'In Progress' :
-                                             revision.status === 'completed' ? 'Completed' :
-                                             revision.status}
-                                          </span>
-                                        </div>
-                                        <span className="text-xs text-orange-600">
-                                          {new Date(revision.requested_at).toLocaleDateString()}
-                                        </span>
-                                      </div>
-                                      
-                                      {/* Revision Notes */}
-                                      {revision.notes && (
-                                        <div className="mb-3 p-2 bg-white border border-orange-200 rounded text-sm">
-                                          <p className="text-gray-700">
-                                            <span className="font-medium text-orange-800">Request:</span> {revision.notes}
-                                          </p>
-                                        </div>
-                                      )}
-                                      
-                                      {/* Revision Images - Only show if revision is completed */}
-                                      {revision.status === 'completed' && revisionImages.length > 0 ? (
-                                        <div>
-                                          <p className="text-xs font-medium text-orange-700 mb-2">
-                                            Revised Images ({revisionImages.length}):
-                                          </p>
-                                          <div className="flex flex-wrap gap-2">
-                                            {revisionImages.map((revImg, imgIndex) => (
-                                              <div 
-                                                key={imgIndex} 
-                                                className="relative group cursor-pointer"
-                                                onClick={(e) => {
-                                                  e.preventDefault()
-                                                  e.stopPropagation()
-                                                  openImagePreview(
-                                                    getEditedImageUrl(revImg), 
-                                                    revImg.filename || `Revision ${revIndex + 1} - ${imgIndex + 1}`, 
-                                                    true
-                                                  )
-                                                }}
-                                              >
-                                                <img
-                                                  src={getEditedImageUrl(revImg)}
-                                                  alt={revImg.filename || `Revision ${revIndex + 1} image ${imgIndex + 1}`}
-                                                  className="w-16 h-16 object-cover rounded border ring-1 ring-orange-300 hover:opacity-75 transition-opacity"
-                                                  onError={(e) => {
-                                                    e.target.style.display = 'none'
-                                                    e.target.nextSibling.style.display = 'flex'
-                                                  }}
-                                                />
-                                                <div className="w-16 h-16 hidden items-center justify-center bg-gray-100 rounded border">
-                                                  <Image className="h-4 w-4 text-gray-400" />
-                                                </div>
-                                                <div className="absolute inset-0 bg-black bg-opacity-0 group-hover:bg-opacity-40 transition-all duration-200 rounded flex items-center justify-center opacity-0 group-hover:opacity-100 pointer-events-none">
-                                                  <ZoomIn className="h-3 w-3 text-white" />
-                                                </div>
-                                                <div className="absolute bottom-0 right-0 bg-orange-600 text-white text-xs px-1 rounded-tl pointer-events-none">
-                                                  R{revIndex + 1}
-                                                </div>
-                                              </div>
-                                            ))}
-                                          </div>
-                                        </div>
-                                      ) : revision.status === 'pending' ? (
-                                        <div className="mt-2 p-3 bg-yellow-50 border border-yellow-200 rounded-lg">
-                                          <div className="flex items-center text-yellow-700">
-                                            <Clock className="h-4 w-4 mr-2" />
-                                            <span className="text-sm">Editor is working on this revision request</span>
-                                          </div>
-                                        </div>
-                                      ) : null}
-                                      
-                                      {/* Completion Info */}
-                                      {revision.completed_at && (
-                                        <div className="mt-2 text-xs text-green-600">
-                                          ✓ Completed on {new Date(revision.completed_at).toLocaleDateString()}
-                                        </div>
-                                      )}
-                                    </div>
-                                  )
-                                })}
-                              </div>
-                            </div>
-                          )}
-                        </div>
-                      )}
-
-                      {/* Revision History */}
-                      {getRevisionHistory(item).length > 1 && (
-                        <div className="mb-4">
-                          <button
-                            onClick={() => {
-                              const historyVisible = document.getElementById(`revision-history-${item.id}`)
-                              historyVisible.style.display = historyVisible.style.display === 'none' ? 'block' : 'none'
-                            }}
-                            className="text-sm text-orange-600 hover:text-orange-800 underline mb-2"
-                          >
-                            View Revision History ({getRevisionHistory(item).length} requests)
-                          </button>
-                          <div id={`revision-history-${item.id}`} style={{display: 'none'}} className="space-y-2">
-                            {getRevisionHistory(item).slice(0, -1).map((revision, index) => (
-                              <div key={revision.id} className="p-2 bg-gray-50 border border-gray-200 rounded text-sm">
-                                <div className="flex items-center justify-between mb-1">
-                                  <span className="font-medium text-gray-700">Revision #{index + 1}</span>
-                                  <span className="text-xs text-gray-500">
-                                    {new Date(revision.requested_at).toLocaleDateString()}
-                                  </span>
-                                </div>
-                                <p className="text-gray-600">{revision.notes}</p>
-                              </div>
-                            ))}
-                          </div>
-                        </div>
-                      )}
-
-                    </div>
-                  ))}
-                </div>
-
-                {/* Action Buttons */}
-                <div className="mt-8 flex justify-end space-x-4">
-                  {selectedOrder.status === 'completed' && (
-                    <button 
-                      onClick={() => downloadAllOrderImages(selectedOrder)}
-                      className="bg-green-600 text-white px-6 py-2 rounded-lg hover:bg-green-700 transition flex items-center"
+                    <button
+                      onClick={() => toggleItemExpanded(item.id)}
+                      className="flex items-center gap-2 px-4 py-2 text-sm font-medium text-gray-700 bg-gray-100 rounded-lg hover:bg-gray-200 transition"
                     >
-                      <Download className="h-5 w-5 mr-2" />
-                      Download All Files
-                    </button>
-                  )}
-                  <button
-                    onClick={closeOrderModal}
-                    className="bg-gray-200 text-gray-800 px-6 py-2 rounded-lg hover:bg-gray-300 transition"
-                  >
-                    Close
-                  </button>
-                </div>
-              </div>
-            </div>
-          </div>
-        )}
-
-        {/* Image Preview Modal */}
-        {previewImage && (
-          <div className="fixed inset-0 bg-black bg-opacity-75 flex items-center justify-center z-50 p-4">
-            <div className="relative max-w-4xl max-h-full">
-              {/* Close button */}
-              <button
-                onClick={closeImagePreview}
-                className="absolute top-4 right-4 bg-white text-gray-900 p-2 rounded-full hover:bg-gray-100 z-10"
-              >
-                <X className="h-6 w-6" />
-              </button>
-              
-              {/* Image */}
-              <img
-                src={previewImage.url}
-                alt={previewImage.filename}
-                className="max-w-full max-h-[80vh] object-contain rounded-lg shadow-lg"
-                onLoad={(e) => {
-                  const img = e.target
-                  setImageInfo({
-                    width: img.naturalWidth,
-                    height: img.naturalHeight,
-                    displayWidth: img.width,
-                    displayHeight: img.height
-                  })
-                }}
-                onError={(e) => {
-                  e.target.src = 'https://via.placeholder.com/400x400/e5e7eb/6b7280?text=Image+Not+Found'
-                }}
-              />
-              
-              {/* Image info */}
-              <div className="absolute bottom-4 left-4 right-4 bg-white bg-opacity-90 backdrop-blur-sm rounded-lg p-4">
-                <div className="space-y-3">
-                  <div>
-                    <div className="flex items-center space-x-2 mb-1">
-                      <h3 className="font-medium text-gray-900 truncate" title={previewImage.filename}>
-                        {previewImage.filename}
-                      </h3>
-                      {previewImage.isEdited && (
-                        <span className="inline-flex items-center px-2 py-1 rounded-full text-xs font-medium bg-green-100 text-green-800">
-                          <CheckCircle className="h-3 w-3 mr-1" />
-                          Edited
-                        </span>
-                      )}
-                    </div>
-                    <p className="text-sm text-gray-600">
-                      {imageInfo ? (
+                      {isExpanded ? (
                         <>
-                          {`${imageInfo.width} × ${imageInfo.height} pixels`}
+                          <ChevronUp className="w-4 h-4" />
+                          Hide Details
                         </>
                       ) : (
-                        'Loading image info...'
+                        <>
+                          <ChevronDown className="w-4 h-4" />
+                          View Details
+                        </>
                       )}
-                    </p>
+                    </button>
                   </div>
-                  <button
-                    onClick={() => downloadImage(previewImage.url, previewImage.filename)}
-                    className="w-full bg-purple-600 text-white px-4 py-2 rounded-md hover:bg-purple-700 flex items-center justify-center space-x-2"
-                  >
-                    <Download className="h-4 w-4" />
-                    <span>Download</span>
-                  </button>
                 </div>
+                
+                {/* Expanded Content */}
+                {isExpanded && (
+                  <div className="border-t border-gray-200 p-4 sm:p-6 bg-gray-50">
+                    {/* Images Section */}
+                    <div className="mb-6">
+                      <h4 className="text-sm font-semibold text-gray-700 mb-3 flex items-center">
+                        {displayData.label}
+                        {displayData.showRevisionBadge && (
+                          <span className="ml-2 px-2 py-0.5 bg-orange-100 text-orange-700 text-xs rounded-full">
+                            Revision
+                          </span>
+                        )}
+                      </h4>
+                      
+                      {displayData.images.length > 0 ? (
+                        <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-3">
+                          {displayData.images.map((img, idx) => (
+                            <div key={idx} className="relative group">
+                              <div className="relative">
+                                <img
+                                  src={img.url}
+                                  alt={`${img.label} ${idx + 1}`}
+                                  className={`w-full h-32 object-cover rounded-lg border ${
+                                    img.type === 'original' ? 'border-gray-300' :
+                                    img.type === 'revision' ? 'border-orange-400 ring-2 ring-orange-200' :
+                                    'border-green-400 ring-2 ring-green-200'
+                                  }`}
+                                  onError={(e) => {
+                                    e.target.style.display = 'none'
+                                    e.target.nextElementSibling.style.display = 'flex'
+                                  }}
+                                />
+                                <div className="w-full h-32 hidden items-center justify-center bg-gray-100 rounded-lg border border-gray-200">
+                                  <Image className="h-6 w-6 text-gray-400" />
+                                  <span className="ml-2 text-xs text-gray-500">Image not found</span>
+                                </div>
+                                
+                                {/* Image type badge */}
+                                <div className={`absolute top-2 left-2 px-2 py-1 rounded-full text-xs font-medium ${
+                                  img.type === 'original' ? 'bg-gray-100 text-gray-700' :
+                                  img.type === 'revision' ? 'bg-orange-100 text-orange-700' :
+                                  'bg-green-100 text-green-700'
+                                }`}>
+                                  {img.label}
+                                </div>
+                              </div>
+                              
+                              {/* Download overlay for edited/revision images */}
+                              {img.type === 'edited' || img.type === 'revision' ? (
+                                <a
+                                  href={img.url}
+                                  download
+                                  className="absolute inset-0 bg-black bg-opacity-0 group-hover:bg-opacity-50 flex items-center justify-center opacity-0 group-hover:opacity-100 transition-all rounded-lg"
+                                >
+                                  <Download className="w-6 h-6 text-white" />
+                                </a>
+                              ) : null}
+                            </div>
+                          ))}
+                        </div>
+                      ) : (
+                        <p className="text-sm text-gray-500">No images available</p>
+                      )}
+                    </div>
+                    
+                    {/* Revision History */}
+                    {item.revisions && item.revisions.length > 0 && (
+                      <div className="mb-6">
+                        <h4 className="text-sm font-semibold text-gray-700 mb-3">Revision History</h4>
+                        <div className="space-y-2">
+                          {item.revisions.map((revision) => (
+                            <div key={revision.id} className="bg-white p-3 rounded-lg border border-gray-200">
+                              <div className="flex items-center justify-between mb-1">
+                                <span className={`text-xs font-medium px-2 py-1 rounded-full ${
+                                  revision.status === 'pending' 
+                                    ? 'bg-yellow-100 text-yellow-700'
+                                    : 'bg-green-100 text-green-700'
+                                }`}>
+                                  {revision.status === 'pending' ? 'In Progress' : 'Completed'}
+                                </span>
+                                <span className="text-xs text-gray-500">
+                                  {new Date(revision.requested_at).toLocaleDateString()}
+                                </span>
+                              </div>
+                              {revision.notes && (
+                                <p className="text-sm text-gray-600 mt-2">
+                                  Notes: {revision.notes}
+                                </p>
+                              )}
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+                    
+                    {/* Revision Request */}
+                    {canRequestRevision(item) && (
+                      <div className="bg-blue-50 p-4 rounded-lg">
+                        <h4 className="text-sm font-semibold text-blue-900 mb-2">Request Revision</h4>
+                        <div className="space-y-3">
+                          <textarea
+                            value={revisionNotes[item.id] || ''}
+                            onChange={(e) => setRevisionNotes(prev => ({ 
+                              ...prev, 
+                              [item.id]: e.target.value 
+                            }))}
+                            placeholder="Describe what changes you'd like..."
+                            className="w-full px-3 py-2 border border-blue-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 text-sm"
+                            rows="3"
+                          />
+                          <button
+                            onClick={() => requestRevision(item.id)}
+                            disabled={processingRevision[item.id] || !revisionNotes[item.id]?.trim()}
+                            className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:bg-gray-400 disabled:cursor-not-allowed transition text-sm font-medium flex items-center"
+                          >
+                            {processingRevision[item.id] ? (
+                              <>
+                                <RefreshCw className="w-4 h-4 mr-2 animate-spin" />
+                                Submitting...
+                              </>
+                            ) : (
+                              <>
+                                <Edit3 className="w-4 h-4 mr-2" />
+                                Request Revision
+                              </>
+                            )}
+                          </button>
+                        </div>
+                      </div>
+                    )}
+                    
+                    {/* Active Revision Notice */}
+                    {item.activeRevision && (
+                      <div className="bg-orange-50 p-4 rounded-lg">
+                        <div className="flex items-start">
+                          <AlertCircle className="w-5 h-5 text-orange-600 mt-0.5 mr-2 flex-shrink-0" />
+                          <div>
+                            <h4 className="text-sm font-semibold text-orange-900">Revision in Progress</h4>
+                            <p className="text-sm text-orange-700 mt-1">
+                              Your revision request is being processed. You'll see the updated images here once complete.
+                            </p>
+                            {item.activeRevision.notes && (
+                              <p className="text-sm text-orange-600 mt-2">
+                                Your notes: {item.activeRevision.notes}
+                              </p>
+                            )}
+                          </div>
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                )}
               </div>
-            </div>
-          </div>
-        )}
+            )
+          })}
+        </div>
       </div>
     </div>
   )

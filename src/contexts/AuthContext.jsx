@@ -46,20 +46,29 @@ export const AuthProvider = ({ children }) => {
 
     // Listen for auth changes
     const { data: { subscription } } = supabase.auth.onAuthStateChange(async (event, session) => {
-      console.log('🔄 SimpleAuth: Auth change:', event)
+      console.log('🔄 SimpleAuth: Auth change:', event, session ? 'with session' : 'no session')
+      
       if (event === 'SIGNED_IN' && session?.user) {
         // Only load profile if it's a different user or no profile exists
         if (!profile || profile.id !== session.user.id) {
+          console.log('👤 SimpleAuth: Loading profile for signed in user')
           await loadUserProfile(session.user)
+        } else {
+          console.log('✅ SimpleAuth: User already loaded, skipping profile load')
         }
-      } else if (event === 'SIGNED_OUT') {
+      } else if (event === 'SIGNED_OUT' || (event === 'TOKEN_REFRESHED' && !session)) {
+        // Handle both explicit signout and expired/invalid tokens
+        console.log('🚪 SimpleAuth: User signed out, clearing local state')
         setUser(null)
         setProfile(null)
         setLastProcessedUserId(null)
+        setProfileLoading(false) // Reset loading state
       }
+      
       // Only set loading to false for auth events, not for initial session
       if (event !== 'INITIAL_SESSION') {
         setLoading(false)
+        console.log('✅ SimpleAuth: Auth state change complete, loading set to false')
       }
     })
 
@@ -203,12 +212,31 @@ export const AuthProvider = ({ children }) => {
   }
 
   const signOut = async () => {
-    const { error } = await supabase.auth.signOut()
-    if (!error) {
+    try {
+      console.log('🚪 SimpleAuth: Starting sign out...')
+      
+      // Always clear local state first to ensure UI updates immediately
       setUser(null)
       setProfile(null)
+      setLastProcessedUserId(null)
+      
+      // Then attempt Supabase signout
+      const { error } = await supabase.auth.signOut()
+      
+      if (error) {
+        console.error('❌ SimpleAuth: Supabase signOut error (local state cleared anyway):', error)
+        // Don't throw error - local state is already cleared which is what matters for UX
+      } else {
+        console.log('✅ SimpleAuth: Successfully signed out from Supabase')
+      }
+      
+      console.log('✅ SimpleAuth: Sign out complete')
+      return { error: null } // Always return success since local state is cleared
+    } catch (error) {
+      console.error('❌ SimpleAuth: Sign out exception:', error)
+      // Local state is already cleared, so this is still a successful logout from user perspective
+      return { error: null }
     }
-    return { error }
   }
 
   const updateProfile = async (updates) => {
@@ -238,6 +266,25 @@ export const AuthProvider = ({ children }) => {
   const isEditor = () => ['admin', 'staff', 'editor'].includes(profile?.role)
   const isCustomer = () => profile?.role === 'customer'
 
+  // Force signout - clears all state and redirects, useful as a fallback
+  const forceSignOut = () => {
+    console.log('🚑 SimpleAuth: Force sign out - clearing all state')
+    setUser(null)
+    setProfile(null)
+    setLastProcessedUserId(null)
+    setProfileLoading(false)
+    setLoading(false)
+    
+    // Clear any stored tokens
+    try {
+      localStorage.removeItem('supabase.auth.token')
+    } catch (e) {
+      // Ignore localStorage errors
+    }
+    
+    console.log('✅ SimpleAuth: Force sign out complete')
+  }
+
   const value = {
     user,
     profile,
@@ -246,6 +293,7 @@ export const AuthProvider = ({ children }) => {
     signIn,
     signUp: null, // Can add later if needed
     signOut,
+    forceSignOut,
     updateProfile,
     isAdmin: isAdmin(),
     isStaff: isStaff(),

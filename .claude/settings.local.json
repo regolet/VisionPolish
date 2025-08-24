@@ -19,7 +19,11 @@
       "Bash(git push:*)",
       "Bash(cat:*)",
       "Bash(taskkill:*)",
-      "Bash(del:*)"
+      "Bash(del:*)",
+      "WebFetch(domain:docs.anthropic.com)",
+      "Bash(npm run lint)",
+      "Bash(cp:*)",
+      "Bash(npx eslint:*)"
     ],
     "deny": [],
     "ask": []

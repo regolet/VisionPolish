@@ -14,7 +14,7 @@ export default function Profile() {
   const [editing, setEditing] = useState(false)
   const [saving, setSaving] = useState(false)
   const [message, setMessage] = useState({ type: '', text: '' })
-  const { user, profile, loading: authLoading, signOut: authSignOut } = useAuth()
+  const { user, profile, loading: authLoading, signOut: authSignOut, forceSignOut } = useAuth()
   const navigate = useNavigate()
 
   const [formData, setFormData] = useState({
@@ -184,11 +184,21 @@ export default function Profile() {
 
   const handleSignOut = async () => {
     try {
-      await authSignOut()
+      console.log('🚪 Profile: Starting sign out...')
+      const result = await authSignOut()
+      
+      if (result?.error) {
+        console.error('❌ Profile: SignOut returned error, trying force signout:', result.error)
+        forceSignOut()
+      }
+      
+      console.log('✅ Profile: Navigating to home page')
       navigate('/')
     } catch (error) {
-      console.error('Error during sign out:', error)
-      // Force navigation even if signout fails
+      console.error('❌ Profile: SignOut exception, using force signout:', error)
+      // If normal signout fails, force clear everything
+      forceSignOut()
+      // Force navigation regardless of errors
       navigate('/')
     }
   }

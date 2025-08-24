@@ -6,6 +6,9 @@ import ProtectedRoute from './components/ProtectedRoute'
 import Layout from './components/Layout/Layout'
 import Home from './pages/Home'
 import Services from './pages/Services'
+import Portfolio from './pages/Portfolio'
+import About from './pages/About'
+import Contact from './pages/Contact'
 import Cart from './pages/Cart'
 import Checkout from './pages/Checkout'
 import Login from './pages/Login'
@@ -13,7 +16,6 @@ import Profile from './pages/Profile'
 import AdminDashboard from './pages/AdminDashboard'
 import UserManagement from './pages/UserManagement'
 import AdminOrderManagement from './pages/AdminOrderManagement'
-import RLSManagement from './pages/RLSManagement'
 import EditorDashboard from './pages/EditorDashboard'
 import OrderSuccess from './pages/OrderSuccess'
 import Orders from './pages/Orders'
@@ -30,6 +32,9 @@ function App() {
               {/* Public Routes */}
               <Route path="/" element={<Home />} />
               <Route path="/services" element={<Services />} />
+              <Route path="/portfolio" element={<Portfolio />} />
+              <Route path="/about" element={<About />} />
+              <Route path="/contact" element={<Contact />} />
               <Route path="/login" element={<Login />} />
               <Route path="/unauthorized" element={<Unauthorized />} />
               
@@ -81,11 +86,6 @@ function App() {
               <Route path="/admin/orders" element={
                 <ProtectedRoute staffOnly={true}>
                   <AdminOrderManagement />
-                </ProtectedRoute>
-              } />
-              <Route path="/admin/rls" element={
-                <ProtectedRoute adminOnly={true}>
-                  <RLSManagement />
                 </ProtectedRoute>
               } />
             </Routes>
