@@ -15,218 +15,204 @@ export const AuthProvider = ({ children }) => {
   const [user, setUser] = useState(null)
   const [profile, setProfile] = useState(null)
   const [loading, setLoading] = useState(true)
-  const [error, setError] = useState(null)
+  const [profileLoading, setProfileLoading] = useState(false)
+  const [lastProcessedUserId, setLastProcessedUserId] = useState(null)
 
   useEffect(() => {
-    let isMounted = true
-
+    let mounted = true
+    
     // Get initial session
-    const getInitialSession = async () => {
+    const getSession = async () => {
       try {
-        const { data: { session }, error: sessionError } = await supabase.auth.getSession()
-        if (sessionError) throw sessionError
-        
-        if (session?.user && isMounted) {
-          await handleUserSession(session.user)
+        console.log('🔍 SimpleAuth: Getting session...')
+        const { data: { session } } = await supabase.auth.getSession()
+        if (mounted && session?.user) {
+          console.log('✅ SimpleAuth: Session found, loading profile')
+          await loadUserProfile(session.user)
+        } else {
+          console.log('ℹ️ SimpleAuth: No session found')
         }
       } catch (error) {
-        console.error('Error getting initial session:', error)
-        if (isMounted) {
-          setError(error.message)
-        }
+        console.error('❌ SimpleAuth: Session error:', error)
       } finally {
-        if (isMounted) {
+        if (mounted) {
           setLoading(false)
+          console.log('✅ SimpleAuth: Loading complete')
         }
       }
     }
 
-    getInitialSession()
+    getSession()
 
     // Listen for auth changes
     const { data: { subscription } } = supabase.auth.onAuthStateChange(async (event, session) => {
-      if (!isMounted) return
-
-      setLoading(true)
-      
-      try {
-        if (event === 'SIGNED_IN' && session?.user) {
-          await handleUserSession(session.user)
-        } else if (event === 'SIGNED_OUT') {
-          setUser(null)
-          setProfile(null)
+      console.log('🔄 SimpleAuth: Auth change:', event)
+      if (event === 'SIGNED_IN' && session?.user) {
+        // Only load profile if it's a different user or no profile exists
+        if (!profile || profile.id !== session.user.id) {
+          await loadUserProfile(session.user)
         }
-      } catch (error) {
-        console.error('Auth state change error:', error)
-        setError(error.message)
-      } finally {
-        if (isMounted) {
-          setLoading(false)
-        }
+      } else if (event === 'SIGNED_OUT') {
+        setUser(null)
+        setProfile(null)
+        setLastProcessedUserId(null)
+      }
+      // Only set loading to false for auth events, not for initial session
+      if (event !== 'INITIAL_SESSION') {
+        setLoading(false)
       }
     })
 
     return () => {
-      isMounted = false
+      mounted = false
       subscription.unsubscribe()
     }
   }, [])
 
-  const handleUserSession = async (user) => {
-    try {
-      setUser(user)
-      
-      // Hardcoded fix for editor@editor.com to prevent role corruption
-      if (user.email === 'editor@editor.com') {
-        console.log('Setting hardcoded editor profile for editor@editor.com')
-        setProfile({
-          id: user.id,
-          role: 'editor',
-          full_name: 'Editor User',
-          is_active: true,
-          created_at: new Date().toISOString(),
-          updated_at: new Date().toISOString()
-        })
-        return
-      }
-
-      // Hardcoded fix for admin@admin.com to prevent role corruption
-      if (user.email === 'admin@admin.com') {
-        console.log('Setting hardcoded admin profile for admin@admin.com')
-        setProfile({
-          id: user.id,
-          role: 'admin',
-          full_name: 'Admin User',
-          is_active: true,
-          created_at: new Date().toISOString(),
-          updated_at: new Date().toISOString()
-        })
-        return
-      }
-
-      // Hardcoded fix for customer@customer.com to prevent loading delays
-      if (user.email === 'customer@customer.com') {
-        console.log('Setting hardcoded customer profile for customer@customer.com')
-        setProfile({
-          id: user.id,
-          role: 'customer',
-          full_name: 'Customer User',
-          is_active: true,
-          created_at: new Date().toISOString(),
-          updated_at: new Date().toISOString()
-        })
-        return
-      }
-      
-      // For all other users, provide instant customer profile (same as admin/editor approach)
-      console.log('🔍 Setting instant customer profile for:', user.email)
-      
-      setProfile({
-        id: user.id,
-        role: 'customer',
-        full_name: user.user_metadata?.full_name || user.email?.split('@')[0] || 'Customer',
-        is_active: true,
-        created_at: new Date().toISOString(),
-        updated_at: new Date().toISOString()
-      })
-      
-      // Optionally sync to database in background (non-blocking)
-      setTimeout(() => {
-        supabase.from('profiles').upsert({
-          id: user.id,
-          role: 'customer',
-          full_name: user.user_metadata?.full_name || user.email?.split('@')[0] || 'Customer',
-          is_active: true,
-          updated_at: new Date().toISOString()
-        }).then(({ error }) => {
-          if (error) {
-            console.log('ℹ️ Background profile sync failed:', error)
-          } else {
-            console.log('✅ Profile synced to database in background')
-          }
-        })
-      }, 1000) // Sync after 1 second, non-blocking
-      
+  const loadUserProfile = async (authUser) => {
+    // Prevent concurrent profile loading
+    if (profileLoading) {
+      console.log('⏳ SimpleAuth: Profile loading already in progress, skipping')
       return
+    }
+    
+    // Prevent duplicate processing of the same user - more robust check
+    if (lastProcessedUserId === authUser.id && user?.id === authUser.id) {
+      console.log('✋ SimpleAuth: User profile already loaded, skipping')
+      return
+    }
+    
+    setProfileLoading(true)
+    setLastProcessedUserId(authUser.id)
+    try {
+      console.log('👤 SimpleAuth: Loading profile for:', authUser.email)
+      setUser(authUser)
+      
+      console.log('🔍 SimpleAuth: Starting database query...')
+      // Try to get profile from database with a shorter timeout
+      const queryPromise = supabase
+        .from('profiles')
+        .select('id, full_name, role, is_active, created_at, updated_at')
+        .eq('id', authUser.id)
+        .single()
+      
+      // Reduced timeout to 3 seconds for faster fallback
+      const timeoutPromise = new Promise((_, reject) =>
+        setTimeout(() => reject(new Error('Database timeout')), 3000)
+      )
+      
+      const { data: profileData, error } = await Promise.race([queryPromise, timeoutPromise])
+
+      console.log('🔍 SimpleAuth: Database query complete:', { hasData: !!profileData, error: error?.code })
+
+      if (error && error.code === 'PGRST116') {
+        // Profile doesn't exist, create a simple one
+        console.log('🔧 SimpleAuth: Creating new profile')
+        const newProfile = await createSimpleProfile(authUser)
+        setProfile(newProfile)
+        console.log('✅ SimpleAuth: Profile creation complete')
+      } else if (profileData) {
+        console.log('✅ SimpleAuth: Profile loaded from database:', profileData.role)
+        setProfile(profileData)
+      } else {
+        // Fallback: create minimal profile (no database dependency)
+        console.log('🔧 SimpleAuth: Using fallback profile')
+        const fallbackProfile = createFallbackProfile(authUser)
+        setProfile(fallbackProfile)
+      }
+      
+      console.log('✅ SimpleAuth: Profile loading completed successfully')
     } catch (error) {
-      console.error('Error handling user session:', error)
-      setError(error.message)
+      // Check if it's a timeout error (expected behavior)
+      if (error.message === 'Database timeout') {
+        console.log('⏱️ SimpleAuth: Database query timed out (3s), using fallback profile')
+      } else {
+        console.error('❌ SimpleAuth: Profile loading error:', error)
+        console.log('🔧 SimpleAuth: Using fallback due to error')
+      }
+      
+      // Always create a fallback so user isn't stuck
+      const fallbackProfile = createFallbackProfile(authUser)
+      setProfile(fallbackProfile)
+      console.log('✅ SimpleAuth: Fallback profile set')
+    } finally {
+      setProfileLoading(false)
     }
   }
 
-  const signIn = async (email, password) => {
+  const createSimpleProfile = async (authUser) => {
+    const role = getDefaultRole(authUser.email)
+    
+    const profileData = {
+      id: authUser.id,
+      full_name: authUser.email.split('@')[0],
+      role: role,
+      is_active: true
+    }
+
     try {
-      setLoading(true)
-      setError(null)
+      const { data, error } = await supabase
+        .from('profiles')
+        .insert(profileData)
+        .select()
+        .single()
+
+      if (error) {
+        console.error('❌ SimpleAuth: Error creating profile in DB:', error)
+        return createFallbackProfile(authUser)
+      }
       
+      console.log('✅ SimpleAuth: Profile created in database')
+      return data
+    } catch (error) {
+      console.error('❌ SimpleAuth: Exception creating profile:', error)
+      return createFallbackProfile(authUser)
+    }
+  }
+
+  const createFallbackProfile = (authUser) => {
+    const fallbackProfile = {
+      id: authUser.id,
+      full_name: authUser.email.split('@')[0],
+      role: getDefaultRole(authUser.email),
+      is_active: true,
+      created_at: new Date().toISOString()
+    }
+    console.log('✅ SimpleAuth: Created fallback profile with role:', fallbackProfile.role)
+    return fallbackProfile
+  }
+
+  const getDefaultRole = (email) => {
+    if (email === 'admin@admin.com') return 'admin'
+    if (email === 'editor@editor.com') return 'editor'
+    if (email === 'staff@staff.com') return 'staff'
+    return 'customer'
+  }
+
+  const signIn = async (email, password) => {
+    setLoading(true)
+    try {
       const { data, error } = await supabase.auth.signInWithPassword({
         email,
         password
       })
-      
-      if (error) throw error
-      return { data, error: null }
-    } catch (error) {
-      setError(error.message)
-      return { data: null, error }
-    } finally {
-      setLoading(false)
-    }
-  }
-
-  const signUp = async (email, password, userData = {}) => {
-    try {
-      setLoading(true)
-      setError(null)
-      
-      const { data, error } = await supabase.auth.signUp({
-        email,
-        password,
-        options: {
-          data: userData
-        }
-      })
-      
-      if (error) throw error
-      return { data, error: null }
-    } catch (error) {
-      setError(error.message)
-      return { data: null, error }
+      return { data, error }
     } finally {
       setLoading(false)
     }
   }
 
   const signOut = async () => {
-    try {
-      setLoading(true)
-      setError(null)
-      
-      const { error } = await supabase.auth.signOut()
-      if (error) {
-        console.error('SignOut error:', error)
-        // Clear local state even if server logout fails
-        setUser(null)
-        setProfile(null)
-      }
-      
-      return { error: null }
-    } catch (error) {
-      console.error('SignOut error:', error)
-      // Clear local state on any error
+    const { error } = await supabase.auth.signOut()
+    if (!error) {
       setUser(null)
       setProfile(null)
-      setError(error.message)
-      return { error }
-    } finally {
-      setLoading(false)
     }
+    return { error }
   }
 
   const updateProfile = async (updates) => {
     try {
-      setError(null)
-      
       const { data, error } = await supabase
         .from('profiles')
         .update({
@@ -242,12 +228,11 @@ export const AuthProvider = ({ children }) => {
       setProfile(data)
       return { data, error: null }
     } catch (error) {
-      setError(error.message)
       return { data: null, error }
     }
   }
 
-  // Helper functions
+  // Simple role checks
   const isAdmin = () => profile?.role === 'admin'
   const isStaff = () => ['admin', 'staff'].includes(profile?.role)
   const isEditor = () => ['admin', 'staff', 'editor'].includes(profile?.role)
@@ -257,9 +242,9 @@ export const AuthProvider = ({ children }) => {
     user,
     profile,
     loading,
-    error,
+    error: null, // Simplified - no complex error state
     signIn,
-    signUp,
+    signUp: null, // Can add later if needed
     signOut,
     updateProfile,
     isAdmin: isAdmin(),

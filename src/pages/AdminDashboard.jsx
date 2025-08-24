@@ -1,13 +1,13 @@
 import { useState, useEffect } from 'react'
 import { useNavigate, Link } from 'react-router-dom'
+import { useAuth } from '../contexts/AuthContext'
 import { supabase } from '../lib/supabase'
 import { Plus, Edit, Trash2, Save, X, Eye, Shield, Users, Package, ClipboardList, Database } from 'lucide-react'
 
 export default function AdminDashboard() {
   const [services, setServices] = useState([])
   const [loading, setLoading] = useState(true)
-  const [user, setUser] = useState(null)
-  const [checking, setChecking] = useState(true)
+  const { user, profile, loading: authLoading } = useAuth()
   const navigate = useNavigate()
   const [editingService, setEditingService] = useState(null)
   const [isAddingNew, setIsAddingNew] = useState(false)
@@ -25,46 +25,19 @@ export default function AdminDashboard() {
   const categories = ['portrait', 'product', 'creative', 'restoration']
 
   useEffect(() => {
-    checkAdminAccess()
-  }, [])
-
-  useEffect(() => {
-    if (user) {
+    if (!authLoading && user && profile) {
+      // User is authenticated, check if they have admin role
+      if (profile.role !== 'admin') {
+        navigate('/unauthorized')
+        return
+      }
+      // User is admin, fetch services
       fetchServices()
-    }
-  }, [user])
-
-  const checkAdminAccess = async () => {
-    console.log('🔍 AdminDashboard: Checking admin access...')
-    const { data: { session } } = await supabase.auth.getSession()
-    
-    if (!session) {
-      console.log('❌ AdminDashboard: No session found, redirecting to login')
+    } else if (!authLoading && !user) {
+      // No user, redirect to login
       navigate('/login')
-      return
     }
-
-    console.log('👤 AdminDashboard: Session user:', session.user.email)
-
-    // Check if user has admin role
-    const { data: profile, error } = await supabase
-      .from('profiles')
-      .select('role')
-      .eq('id', session.user.id)
-      .single()
-
-    console.log('🔐 AdminDashboard: Profile check result:', { profile, error })
-
-    if (error || profile?.role !== 'admin') {
-      console.log('❌ AdminDashboard: Access denied. Role:', profile?.role, 'Error:', error)
-      navigate('/unauthorized')
-      return
-    }
-
-    console.log('✅ AdminDashboard: Admin access granted')
-    setUser(session.user)
-    setChecking(false)
-  }
+  }, [user, profile, authLoading, navigate])
 
   const fetchServices = async () => {
     setLoading(true)
@@ -189,14 +162,14 @@ export default function AdminDashboard() {
     })
   }
 
-  if (checking) {
+  if (authLoading) {
     return (
       <div className="min-h-screen flex items-center justify-center bg-gray-50">
         <div className="text-center">
           <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-purple-600 mx-auto mb-4"></div>
           <p className="text-gray-600 flex items-center">
             <Shield className="h-5 w-5 mr-2" />
-            Verifying admin access...
+            Loading...
           </p>
         </div>
       </div>
@@ -204,91 +177,91 @@ export default function AdminDashboard() {
   }
 
   return (
-    <div className="min-h-screen bg-gray-50 py-12">
+    <div className="min-h-screen bg-gray-50 py-8 md:py-12">
       <div className="container mx-auto px-4">
-        <div className="flex justify-between items-center mb-8">
-          <h1 className="text-4xl font-bold">Admin Dashboard</h1>
-          <div className="flex space-x-4">
+        <div className="flex flex-col space-y-4 mb-6 md:mb-8">
+          <h1 className="text-2xl md:text-3xl lg:text-4xl font-bold">Admin Dashboard</h1>
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 xl:grid-cols-5 gap-3">
             <Link
               to="/admin/users"
-              className="bg-blue-600 text-white px-4 py-2 rounded-lg hover:bg-blue-700 transition flex items-center"
+              className="bg-blue-600 text-white px-4 py-3 rounded-lg hover:bg-blue-700 transition flex items-center justify-center text-sm"
             >
-              <Users className="h-5 w-5 mr-2" />
+              <Users className="h-4 w-4 mr-2" />
               Manage Users
             </Link>
             <Link
               to="/admin/orders"
-              className="bg-green-600 text-white px-4 py-2 rounded-lg hover:bg-green-700 transition flex items-center"
+              className="bg-green-600 text-white px-4 py-3 rounded-lg hover:bg-green-700 transition flex items-center justify-center text-sm"
             >
-              <ClipboardList className="h-5 w-5 mr-2" />
+              <ClipboardList className="h-4 w-4 mr-2" />
               Manage Orders
             </Link>
             <Link
               to="/admin/rls"
-              className="bg-orange-600 text-white px-4 py-2 rounded-lg hover:bg-orange-700 transition flex items-center"
+              className="bg-orange-600 text-white px-4 py-3 rounded-lg hover:bg-orange-700 transition flex items-center justify-center text-sm"
             >
-              <Database className="h-5 w-5 mr-2" />
+              <Database className="h-4 w-4 mr-2" />
               RLS Settings
             </Link>
             <button
               onClick={startAddNew}
-              className="bg-purple-600 text-white px-4 py-2 rounded-lg hover:bg-purple-700 transition flex items-center"
+              className="bg-purple-600 text-white px-4 py-3 rounded-lg hover:bg-purple-700 transition flex items-center justify-center text-sm sm:col-span-2 lg:col-span-1"
             >
-              <Plus className="h-5 w-5 mr-2" />
+              <Plus className="h-4 w-4 mr-2" />
               Add New Service
             </button>
           </div>
         </div>
 
         {/* Dashboard Stats */}
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mb-8">
-          <div className="bg-white rounded-lg shadow-md p-6">
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4 md:gap-6 mb-6 md:mb-8">
+          <div className="bg-white rounded-lg shadow-md p-4 md:p-6">
             <div className="flex items-center justify-between">
               <div>
                 <p className="text-sm text-gray-600">Total Services</p>
-                <p className="text-3xl font-bold text-gray-900">{services.length}</p>
+                <p className="text-2xl md:text-3xl font-bold text-gray-900">{services.length}</p>
               </div>
-              <Package className="h-10 w-10 text-purple-600" />
+              <Package className="h-8 w-8 md:h-10 md:w-10 text-purple-600" />
             </div>
           </div>
-          <div className="bg-white rounded-lg shadow-md p-6">
+          <div className="bg-white rounded-lg shadow-md p-4 md:p-6">
             <div className="flex items-center justify-between">
               <div>
                 <p className="text-sm text-gray-600">Active Services</p>
-                <p className="text-3xl font-bold text-gray-900">
+                <p className="text-2xl md:text-3xl font-bold text-gray-900">
                   {services.filter(s => s.is_active).length}
                 </p>
               </div>
-              <Eye className="h-10 w-10 text-green-600" />
+              <Eye className="h-8 w-8 md:h-10 md:w-10 text-green-600" />
             </div>
           </div>
-          <div className="bg-white rounded-lg shadow-md p-6">
+          <div className="bg-white rounded-lg shadow-md p-4 md:p-6 sm:col-span-2 lg:col-span-1">
             <div className="flex items-center justify-between">
               <div>
                 <p className="text-sm text-gray-600">Categories</p>
-                <p className="text-3xl font-bold text-gray-900">4</p>
+                <p className="text-2xl md:text-3xl font-bold text-gray-900">4</p>
               </div>
-              <Shield className="h-10 w-10 text-blue-600" />
+              <Shield className="h-8 w-8 md:h-10 md:w-10 text-blue-600" />
             </div>
           </div>
         </div>
 
         {/* Service Form */}
         {(isAddingNew || editingService) && (
-          <div className="bg-white rounded-lg shadow-lg p-6 mb-8">
-            <div className="flex justify-between items-center mb-4">
-              <h2 className="text-2xl font-semibold">
+          <div className="bg-white rounded-lg shadow-lg p-4 md:p-6 mb-6 md:mb-8">
+            <div className="flex flex-col sm:flex-row sm:justify-between sm:items-center mb-4 space-y-2 sm:space-y-0">
+              <h2 className="text-xl md:text-2xl font-semibold">
                 {editingService ? 'Edit Service' : 'Add New Service'}
               </h2>
               <button
                 onClick={resetForm}
-                className="text-gray-500 hover:text-gray-700"
+                className="text-gray-500 hover:text-gray-700 self-end sm:self-auto"
               >
                 <X className="h-6 w-6" />
               </button>
             </div>
 
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+            <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 md:gap-6">
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-2">
                   Service Name
@@ -298,7 +271,7 @@ export default function AdminDashboard() {
                   name="name"
                   value={formData.name}
                   onChange={handleInputChange}
-                  className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-purple-600"
+                  className="mobile-input w-full"
                   required
                 />
               </div>
@@ -311,7 +284,7 @@ export default function AdminDashboard() {
                   name="category"
                   value={formData.category}
                   onChange={handleInputChange}
-                  className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-purple-600"
+                  className="mobile-input w-full"
                 >
                   {categories.map(cat => (
                     <option key={cat} value={cat}>
@@ -331,7 +304,7 @@ export default function AdminDashboard() {
                   name="base_price"
                   value={formData.base_price}
                   onChange={handleInputChange}
-                  className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-purple-600"
+                  className="mobile-input w-full"
                   required
                 />
               </div>
@@ -424,8 +397,8 @@ export default function AdminDashboard() {
 
         {/* Services List */}
         <div className="bg-white rounded-lg shadow-lg overflow-hidden">
-          <div className="px-6 py-4 border-b border-gray-200">
-            <h2 className="text-xl font-semibold">Services Management</h2>
+          <div className="px-4 md:px-6 py-4 border-b border-gray-200">
+            <h2 className="text-lg md:text-xl font-semibold">Services Management</h2>
           </div>
 
           {loading ? (
@@ -433,7 +406,63 @@ export default function AdminDashboard() {
               <div className="inline-block animate-spin rounded-full h-12 w-12 border-b-2 border-purple-600"></div>
             </div>
           ) : (
-            <div className="overflow-x-auto">
+            <>
+              {/* Mobile Card Layout */}
+              <div className="block md:hidden">
+                <div className="divide-y divide-gray-200">
+                  {services.map((service) => (
+                    <div key={service.id} className="p-4 space-y-3">
+                      <div className="flex items-start space-x-3">
+                        <img
+                          src={service.image_url}
+                          alt={service.name}
+                          className="h-12 w-12 rounded-lg object-cover flex-shrink-0"
+                        />
+                        <div className="flex-1 min-w-0">
+                          <h3 className="text-sm font-medium text-gray-900 truncate">
+                            {service.name}
+                          </h3>
+                          <p className="text-xs text-gray-500 line-clamp-2">
+                            {service.description}
+                          </p>
+                        </div>
+                        <div className="flex space-x-2">
+                          <button
+                            onClick={() => handleEdit(service)}
+                            className="text-purple-600 hover:text-purple-900 p-1"
+                          >
+                            <Edit className="h-4 w-4" />
+                          </button>
+                          <button
+                            onClick={() => handleDelete(service.id)}
+                            className="text-red-600 hover:text-red-900 p-1"
+                          >
+                            <Trash2 className="h-4 w-4" />
+                          </button>
+                        </div>
+                      </div>
+                      <div className="flex flex-wrap items-center gap-2 text-xs">
+                        <span className="inline-flex items-center px-2 py-1 rounded-full bg-purple-100 text-purple-800">
+                          {service.category}
+                        </span>
+                        <span className="font-medium text-gray-900">
+                          ${service.base_price}
+                        </span>
+                        <span className={`inline-flex items-center px-2 py-1 rounded-full ${
+                          service.is_active
+                            ? 'bg-green-100 text-green-800'
+                            : 'bg-red-100 text-red-800'
+                        }`}>
+                          {service.is_active ? 'Active' : 'Inactive'}
+                        </span>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+
+              {/* Desktop Table Layout */}
+              <div className="hidden md:block overflow-x-auto">
               <table className="w-full">
                 <thead className="bg-gray-50">
                   <tr>
@@ -512,6 +541,7 @@ export default function AdminDashboard() {
                 </tbody>
               </table>
             </div>
+            </>
           )}
         </div>
       </div>

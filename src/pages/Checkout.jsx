@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react'
 import { useNavigate, useSearchParams } from 'react-router-dom'
+import { useAuth } from '../contexts/AuthContext'
 import { supabase } from '../lib/supabase'
 import { CreditCard, Check, ArrowRight, Image } from 'lucide-react'
 
@@ -7,44 +8,22 @@ export default function Checkout() {
   const [searchParams] = useSearchParams()
   const orderId = searchParams.get('order')
   const navigate = useNavigate()
+  const { user, loading: authLoading } = useAuth()
   const [order, setOrder] = useState(null)
   const [orderItems, setOrderItems] = useState([])
   const [uploadedFiles, setUploadedFiles] = useState({})
   const [loading, setLoading] = useState(true)
   const [processing, setProcessing] = useState(false)
-  const [user, setUser] = useState(null)
 
   useEffect(() => {
-    console.log('🚀 Checkout component mounted, checking user...')
-    checkUser()
-  }, [])
-
-  useEffect(() => {
-    console.log('🔄 User/Order effect triggered:', { 
-      hasUser: !!user, 
-      userEmail: user?.email, 
-      orderId 
-    })
-    if (user && orderId) {
-      console.log('✅ Both user and orderId present, fetching order details')
+    if (user && !authLoading && orderId) {
       fetchOrderDetails()
-    } else {
-      console.log('⏳ Waiting for user or orderId...', { user: !!user, orderId })
+    } else if (!authLoading && !user) {
+      setLoading(false)
     }
-  }, [user, orderId])
+  }, [user, authLoading, orderId])
 
-  const checkUser = async () => {
-    console.log('🔐 Checking user authentication...')
-    const { data: { session } } = await supabase.auth.getSession()
-    console.log('📋 Session data:', session?.user?.email)
-    setUser(session?.user ?? null)
-    if (!session) {
-      console.log('❌ No session found, redirecting to login')
-      navigate('/login')
-    } else {
-      console.log('✅ User authenticated:', session.user.email)
-    }
-  }
+
 
   const fetchOrderDetails = async () => {
     console.log('🛒 Fetching order details for order ID:', orderId)
@@ -158,7 +137,8 @@ export default function Checkout() {
     }
   }
 
-  if (loading) {
+  // Show loading while auth is loading or while fetching order
+  if (authLoading || loading) {
     return (
       <div className="min-h-screen flex items-center justify-center">
         <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-purple-600"></div>
@@ -183,15 +163,15 @@ export default function Checkout() {
   }
 
   return (
-    <div className="bg-gray-50 min-h-screen py-12">
+    <div className="bg-gray-50 min-h-screen py-8 md:py-12">
       <div className="container mx-auto px-4">
-        <h1 className="text-3xl font-bold mb-8">Complete Your Order</h1>
+        <h1 className="text-2xl md:text-3xl font-bold mb-6 md:mb-8">Complete Your Order</h1>
 
-        <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
-          <div className="lg:col-span-2 space-y-6">
+        <div className="grid grid-cols-1 xl:grid-cols-3 gap-6 md:gap-8">
+          <div className="xl:col-span-2 space-y-4 md:space-y-6">
             {/* Order Details Section */}
-            <div className="bg-white rounded-lg shadow-md p-6">
-              <h2 className="text-xl font-semibold mb-4 flex items-center">
+            <div className="bg-white rounded-lg shadow-md p-4 md:p-6">
+              <h2 className="text-lg md:text-xl font-semibold mb-4 flex items-center">
                 <Image className="mr-2 h-5 w-5" />
                 Order Details
               </h2>
@@ -216,16 +196,16 @@ export default function Checkout() {
                         Photos to be edited ({item.specifications.photos.length}):
                       </p>
                       
-                      <div className="flex flex-col lg:flex-row gap-3">
+                      <div className="flex flex-col xl:flex-row gap-3">
                         {/* Photos on the left */}
                         <div className="flex-1">
-                          <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-3">
+                          <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 xl:grid-cols-3 2xl:grid-cols-4 gap-2 md:gap-3">
                             {item.specifications.photos.map((photo, index) => (
                               <div key={index} className="relative">
                                 <img
                                   src={photo.url}
                                   alt={photo.filename}
-                                  className="w-full h-24 object-cover rounded-lg border border-gray-200"
+                                  className="w-full h-20 md:h-24 object-cover rounded-lg border border-gray-200"
                                 />
                                 <div className="absolute inset-0 bg-green-500 bg-opacity-20 rounded-lg flex items-center justify-center">
                                   <Check className="h-6 w-6 text-green-600" />
@@ -236,7 +216,7 @@ export default function Checkout() {
                         </div>
                         
                         {/* Special instructions on the right */}
-                        <div className="lg:w-80 flex-shrink-0">
+                        <div className="xl:w-80 flex-shrink-0">
                           {item.specifications?.notes ? (
                             <div className="p-4 bg-blue-50 border border-blue-200 rounded-lg h-fit">
                               <p className="text-sm font-medium text-blue-800 mb-2 flex items-center">
@@ -333,8 +313,8 @@ export default function Checkout() {
 
           {/* Order Summary */}
           <div>
-            <div className="bg-white rounded-lg shadow-md p-6 sticky top-24">
-              <h2 className="text-xl font-semibold mb-4">Order Summary</h2>
+            <div className="bg-white rounded-lg shadow-md p-4 md:p-6 lg:sticky lg:top-24">
+              <h2 className="text-lg md:text-xl font-semibold mb-4">Order Summary</h2>
               
               <div className="space-y-3 mb-4">
                 {orderItems.map((item) => (
@@ -360,14 +340,15 @@ export default function Checkout() {
                 <button
                   onClick={processPayment}
                   disabled={processing}
-                  className="w-full bg-purple-600 text-white py-3 rounded-lg hover:bg-purple-700 transition font-semibold disabled:bg-gray-400 disabled:cursor-not-allowed flex items-center justify-center"
+                  className="w-full bg-purple-600 text-white py-3 px-4 rounded-lg hover:bg-purple-700 transition font-semibold disabled:bg-gray-400 disabled:cursor-not-allowed flex items-center justify-center text-sm md:text-base"
                 >
                   {processing ? (
                     <div className="animate-spin rounded-full h-5 w-5 border-b-2 border-white"></div>
                   ) : (
                     <>
-                      Complete Order & Pay ${order.total_amount}
-                      <ArrowRight className="ml-2 h-5 w-5" />
+                      <span className="hidden sm:inline">Complete Order & Pay ${order.total_amount}</span>
+                      <span className="sm:hidden">Pay ${order.total_amount}</span>
+                      <ArrowRight className="ml-2 h-4 w-4 md:h-5 md:w-5" />
                     </>
                   )}
                 </button>

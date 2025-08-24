@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react'
 import { useNavigate } from 'react-router-dom'
+import { useAuth } from '../contexts/AuthContext'
 import { supabase } from '../lib/supabase'
 import { 
   Users, Plus, Edit, Trash2, Save, X, Shield, 
@@ -14,7 +15,7 @@ export default function UserManagement() {
   const [filterRole, setFilterRole] = useState('all')
   const [editingUser, setEditingUser] = useState(null)
   const [showAddUser, setShowAddUser] = useState(false)
-  const [currentUser, setCurrentUser] = useState(null)
+  const { user, profile, loading: authLoading } = useAuth()
   const navigate = useNavigate()
 
   const [formData, setFormData] = useState({
@@ -35,36 +36,19 @@ export default function UserManagement() {
   ]
 
   useEffect(() => {
-    checkAdminAccess()
-  }, [])
-
-  useEffect(() => {
-    if (currentUser) {
+    if (!authLoading && user && profile) {
+      // User is authenticated, check if they have admin role
+      if (profile.role !== 'admin') {
+        navigate('/unauthorized')
+        return
+      }
+      // User is admin, fetch users
       fetchUsers()
-    }
-  }, [currentUser])
-
-  const checkAdminAccess = async () => {
-    const { data: { session } } = await supabase.auth.getSession()
-    
-    if (!session) {
+    } else if (!authLoading && !user) {
+      // No user, redirect to login
       navigate('/login')
-      return
     }
-
-    const { data: profile } = await supabase
-      .from('profiles')
-      .select('*')
-      .eq('id', session.user.id)
-      .single()
-
-    if (!profile || profile.role !== 'admin') {
-      navigate('/unauthorized')
-      return
-    }
-
-    setCurrentUser(profile)
-  }
+  }, [user, profile, authLoading, navigate])
 
   const fetchUsers = async () => {
     setLoading(true)
@@ -175,7 +159,7 @@ export default function UserManagement() {
   }
 
   const handleDeleteUser = async (userId) => {
-    if (userId === currentUser?.id) {
+    if (userId === profile?.id) {
       alert("You cannot delete your own account!")
       return
     }
@@ -247,7 +231,7 @@ export default function UserManagement() {
     return roles.find(r => r.value === role) || roles[3]
   }
 
-  if (loading) {
+  if (authLoading) {
     return (
       <div className="min-h-screen flex items-center justify-center">
         <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-purple-600"></div>
@@ -256,44 +240,46 @@ export default function UserManagement() {
   }
 
   return (
-    <div className="min-h-screen bg-gray-50 py-12">
+    <div className="min-h-screen bg-gray-50 py-8 md:py-12">
       <div className="container mx-auto px-4">
-        <div className="flex justify-between items-center mb-8">
-          <div>
-            <h1 className="text-4xl font-bold">User Management</h1>
-            <p className="text-gray-600 mt-2">Manage users, roles, and permissions</p>
+        <div className="flex flex-col space-y-4 mb-6 md:mb-8">
+          <div className="flex flex-col sm:flex-row sm:justify-between sm:items-start gap-4">
+            <div>
+              <h1 className="text-2xl md:text-3xl lg:text-4xl font-bold">User Management</h1>
+              <p className="text-gray-600 mt-1 md:mt-2 text-sm md:text-base">Manage users, roles, and permissions</p>
+            </div>
+            <button
+              onClick={() => {
+                setShowAddUser(true)
+                setEditingUser(null)
+              }}
+              className="bg-purple-600 text-white px-4 py-3 rounded-lg hover:bg-purple-700 transition flex items-center justify-center text-sm w-full sm:w-auto"
+            >
+              <Plus className="h-4 w-4 mr-2" />
+              Add New User
+            </button>
           </div>
-          <button
-            onClick={() => {
-              setShowAddUser(true)
-              setEditingUser(null)
-            }}
-            className="bg-purple-600 text-white px-4 py-2 rounded-lg hover:bg-purple-700 transition flex items-center"
-          >
-            <Plus className="h-5 w-5 mr-2" />
-            Add New User
-          </button>
         </div>
 
         {/* Search and Filters */}
-        <div className="bg-white rounded-lg shadow-md p-4 mb-6">
-          <div className="flex flex-col sm:flex-row gap-4">
+        <div className="bg-white rounded-lg shadow-md p-4 mb-4 md:mb-6">
+          <div className="flex flex-col sm:flex-row gap-3 md:gap-4">
             <div className="flex-1 relative">
-              <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 h-5 w-5 text-gray-400" />
+              <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 h-4 w-4 md:h-5 md:w-5 text-gray-400" />
               <input
                 type="text"
                 placeholder="Search users by name, email, or department..."
                 value={searchTerm}
                 onChange={(e) => setSearchTerm(e.target.value)}
-                className="w-full pl-10 pr-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-purple-600"
+                className="mobile-input w-full pl-9 md:pl-10"
               />
             </div>
             <div className="flex items-center space-x-2">
-              <Filter className="h-5 w-5 text-gray-400" />
+              <Filter className="h-4 w-4 md:h-5 md:w-5 text-gray-400" />
               <select
                 value={filterRole}
                 onChange={(e) => setFilterRole(e.target.value)}
-                className="px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-purple-600"
+                className="mobile-input min-w-0 w-full sm:w-auto"
               >
                 <option value="all">All Roles</option>
                 {roles.map(role => (
@@ -443,16 +429,96 @@ export default function UserManagement() {
 
         {/* Users Table */}
         <div className="bg-white rounded-lg shadow-lg overflow-hidden">
-          <div className="px-6 py-4 border-b border-gray-200">
-            <div className="flex justify-between items-center">
-              <h2 className="text-xl font-semibold">All Users</h2>
+          <div className="px-4 md:px-6 py-4 border-b border-gray-200">
+            <div className="flex flex-col sm:flex-row sm:justify-between sm:items-center gap-2">
+              <h2 className="text-lg md:text-xl font-semibold">All Users</h2>
               <p className="text-sm text-gray-600">
                 {filteredUsers.length} user{filteredUsers.length !== 1 ? 's' : ''}
               </p>
             </div>
           </div>
 
-          <div className="overflow-x-auto">
+          {/* Mobile Card Layout */}
+          <div className="block lg:hidden">
+            <div className="divide-y divide-gray-200">
+              {filteredUsers.map((user) => {
+                const roleInfo = getRoleInfo(user.role)
+                const RoleIcon = roleInfo.icon
+                
+                return (
+                  <div key={user.id} className="p-4 space-y-3">
+                    <div className="flex items-start justify-between">
+                      <div className="flex items-start space-x-3 flex-1 min-w-0">
+                        <div className="flex-shrink-0 h-12 w-12 bg-purple-100 rounded-full flex items-center justify-center">
+                          <Users className="h-6 w-6 text-purple-600" />
+                        </div>
+                        <div className="flex-1 min-w-0">
+                          <h3 className="text-sm font-medium text-gray-900 truncate">
+                            {user.full_name || 'No Name'}
+                          </h3>
+                          <p className="text-xs text-gray-500 flex items-center">
+                            <Mail className="h-3 w-3 mr-1" />
+                            <span className="truncate">{user.email || 'No Email'}</span>
+                          </p>
+                          {user.phone && (
+                            <p className="text-xs text-gray-400 flex items-center">
+                              <Phone className="h-3 w-3 mr-1" />
+                              {user.phone}
+                            </p>
+                          )}
+                        </div>
+                      </div>
+                      <div className="flex space-x-2 ml-2">
+                        <button
+                          onClick={() => handleEditUser(user)}
+                          className="text-purple-600 hover:text-purple-900 p-1"
+                          title="Edit User"
+                        >
+                          <Edit className="h-4 w-4" />
+                        </button>
+                        <button
+                          onClick={() => handleDeleteUser(user.id)}
+                          className="text-red-600 hover:text-red-900 p-1"
+                          title="Delete User"
+                          disabled={user.id === profile?.id}
+                        >
+                          <Trash2 className={`h-4 w-4 ${user.id === profile?.id ? 'opacity-50 cursor-not-allowed' : ''}`} />
+                        </button>
+                      </div>
+                    </div>
+                    <div className="flex flex-wrap items-center gap-2 text-xs">
+                      <span className={`inline-flex items-center px-2 py-1 rounded-full bg-${roleInfo.color}-100 text-${roleInfo.color}-800`}>
+                        <RoleIcon className="h-3 w-3 mr-1" />
+                        {roleInfo.label}
+                      </span>
+                      {user.department && (
+                        <span className="inline-flex items-center px-2 py-1 rounded-full bg-gray-100 text-gray-800">
+                          {user.department}
+                        </span>
+                      )}
+                      {user.is_active !== false ? (
+                        <span className="inline-flex items-center px-2 py-1 rounded-full bg-green-100 text-green-800">
+                          <Check className="h-3 w-3 mr-1" />
+                          Active
+                        </span>
+                      ) : (
+                        <span className="inline-flex items-center px-2 py-1 rounded-full bg-red-100 text-red-800">
+                          <X className="h-3 w-3 mr-1" />
+                          Inactive
+                        </span>
+                      )}
+                      <span className="text-gray-500">
+                        Joined {new Date(user.created_at).toLocaleDateString()}
+                      </span>
+                    </div>
+                  </div>
+                )
+              })}
+            </div>
+          </div>
+
+          {/* Desktop Table Layout */}
+          <div className="hidden lg:block overflow-x-auto">
             <table className="w-full">
               <thead className="bg-gray-50">
                 <tr>
@@ -543,9 +609,9 @@ export default function UserManagement() {
                             onClick={() => handleDeleteUser(user.id)}
                             className="text-red-600 hover:text-red-900"
                             title="Delete User"
-                            disabled={user.id === currentUser?.id}
+                            disabled={user.id === profile?.id}
                           >
-                            <Trash2 className={`h-5 w-5 ${user.id === currentUser?.id ? 'opacity-50 cursor-not-allowed' : ''}`} />
+                            <Trash2 className={`h-5 w-5 ${user.id === profile?.id ? 'opacity-50 cursor-not-allowed' : ''}`} />
                           </button>
                         </div>
                       </td>
@@ -565,9 +631,9 @@ export default function UserManagement() {
         </div>
 
         {/* Role Legend */}
-        <div className="mt-8 bg-white rounded-lg shadow-md p-6">
+        <div className="mt-6 md:mt-8 bg-white rounded-lg shadow-md p-4 md:p-6">
           <h3 className="text-lg font-semibold mb-4">Role Permissions</h3>
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
+          <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-4">
             {roles.map(role => {
               const RoleIcon = role.icon
               return (

@@ -1,6 +1,8 @@
 import { useState, useCallback } from 'react'
 import { Upload, X, AlertCircle, CheckCircle, Image } from 'lucide-react'
 import { supabase } from '../lib/supabase'
+import { securityValidators, validators } from '../utils/validation'
+import { SecurityUtils } from '../config/security'
 
 export default function PhotoUpload({ onUploadComplete, maxFiles = 5, serviceId = null }) {
   const [files, setFiles] = useState([])
@@ -14,12 +16,48 @@ export default function PhotoUpload({ onUploadComplete, maxFiles = 5, serviceId 
   const validateFile = (file) => {
     const errors = []
     
+    // Security check: Is file safe to upload?
+    if (!SecurityUtils.isFileSafe(file)) {
+      errors.push('File type or size not allowed for security reasons')
+    }
+    
+    // Check for XSS patterns in filename
+    if (securityValidators.hasXSSPattern(file.name)) {
+      errors.push('File name contains invalid characters')
+    }
+    
+    // Validate file name
+    const sanitizedName = securityValidators.sanitizeFileName(file.name)
+    if (sanitizedName !== file.name) {
+      errors.push('File name contains invalid characters. Please rename your file.')
+    }
+    
+    // Standard validations
     if (!acceptedTypes.includes(file.type)) {
       errors.push('Only JPG, PNG, and WebP files are allowed')
     }
     
     if (file.size > maxFileSize) {
       errors.push('File size must be less than 10MB')
+    }
+    
+    // Additional security: Check if file extension matches MIME type
+    const extension = file.name.split('.').pop()?.toLowerCase()
+    const mimeTypeMap = {
+      'jpg': 'image/jpeg',
+      'jpeg': 'image/jpeg', 
+      'png': 'image/png',
+      'webp': 'image/webp'
+    }
+    
+    if (extension && mimeTypeMap[extension] && mimeTypeMap[extension] !== file.type) {
+      errors.push('File extension does not match file type. This may be a security risk.')
+      SecurityUtils.logSecurityEvent('suspicious_file_upload', {
+        fileName: file.name,
+        extension,
+        mimeType: file.type,
+        expectedMimeType: mimeTypeMap[extension]
+      })
     }
     
     return errors
@@ -93,6 +131,18 @@ export default function PhotoUpload({ onUploadComplete, maxFiles = 5, serviceId 
   const uploadFiles = async () => {
     if (files.length === 0) return
 
+    // Security: Check rate limiting
+    const rateLimitCheck = SecurityUtils.checkRateLimit('file_upload', {
+      maxRequests: 10,
+      windowMs: 60 * 60 * 1000 // 1 hour
+    })
+    
+    if (!rateLimitCheck.allowed) {
+      const resetTime = new Date(rateLimitCheck.resetTime)
+      setErrors(prev => [...prev, `Upload rate limit exceeded. Try again at ${resetTime.toLocaleTimeString()}`])
+      return
+    }
+
     setUploading(true)
     const uploadedFiles = []
 
@@ -108,10 +158,20 @@ export default function PhotoUpload({ onUploadComplete, maxFiles = 5, serviceId 
           f.id === fileObj.id ? { ...f, status: 'uploading', progress: 0 } : f
         ))
 
-        // Generate unique filename
+        // Generate secure filename
         const fileExt = fileObj.file.name.split('.').pop()
-        const fileName = `${Date.now()}-${Math.random().toString(36).substr(2, 9)}.${fileExt}`
+        const secureToken = SecurityUtils.generateSecureToken(16)
+        const timestamp = Date.now()
+        const fileName = `${timestamp}-${secureToken}.${fileExt}`
         const filePath = `uploads/${fileName}`
+
+        // Security log: File upload attempt
+        SecurityUtils.logSecurityEvent('file_upload_attempt', {
+          originalFileName: fileObj.file.name,
+          fileSize: fileObj.file.size,
+          fileType: fileObj.file.type,
+          secureFileName: fileName
+        })
 
         // Upload to Supabase Storage
         const { data, error } = await supabase.storage
@@ -122,6 +182,11 @@ export default function PhotoUpload({ onUploadComplete, maxFiles = 5, serviceId 
           })
 
         if (error) {
+          SecurityUtils.logSecurityEvent('file_upload_error', {
+            error: error.message,
+            fileName: fileObj.file.name
+          })
+          
           // Update status to error
           setFiles(prev => prev.map(f => 
             f.id === fileObj.id ? { ...f, status: 'error', error: error.message } : f
@@ -144,6 +209,13 @@ export default function PhotoUpload({ onUploadComplete, maxFiles = 5, serviceId 
 
         uploadedFiles.push(uploadedFile)
 
+        // Security log: Successful upload
+        SecurityUtils.logSecurityEvent('file_upload_success', {
+          fileName: fileName,
+          fileSize: fileObj.file.size,
+          url: publicUrl
+        })
+
         // Update status to completed
         setFiles(prev => prev.map(f => 
           f.id === fileObj.id ? uploadedFile : f
@@ -156,6 +228,10 @@ export default function PhotoUpload({ onUploadComplete, maxFiles = 5, serviceId 
 
     } catch (error) {
       console.error('Upload error:', error)
+      SecurityUtils.logSecurityEvent('file_upload_critical_error', {
+        error: error.message,
+        stack: error.stack
+      })
       setErrors(prev => [...prev, 'Upload failed. Please try again.'])
     } finally {
       setUploading(false)

@@ -342,7 +342,8 @@ export default function AdminOrderManagement() {
 
   const handleAssignEditor = async (orderId, editorId) => {
     try {
-      const { error } = await supabase
+      // First, update the order assignment
+      const { error: orderError } = await supabase
         .from('orders')
         .update({ 
           assigned_editor: editorId,
@@ -351,7 +352,39 @@ export default function AdminOrderManagement() {
         })
         .eq('id', orderId)
 
-      if (error) throw error
+      if (orderError) throw orderError
+
+      // Also update any pending revisions for this order to assign them to the new editor
+      if (editorId) {
+        // Get all order items for this order
+        const { data: orderItems, error: orderItemsError } = await supabase
+          .from('order_items')
+          .select('id')
+          .eq('order_id', orderId)
+
+        if (orderItemsError) {
+          console.error('Error fetching order items:', orderItemsError)
+        } else if (orderItems && orderItems.length > 0) {
+          const orderItemIds = orderItems.map(item => item.id)
+          
+          // Update pending revisions to assign to the new editor
+          const { error: revisionsError } = await supabase
+            .from('revisions')
+            .update({ 
+              assigned_to: editorId,
+              updated_at: new Date().toISOString()
+            })
+            .in('order_item_id', orderItemIds)
+            .eq('status', 'pending')
+
+          if (revisionsError) {
+            console.error('Error updating revision assignments:', revisionsError)
+            // Don't throw - order assignment succeeded, just log the revision error
+          } else {
+            console.log('✅ Updated pending revisions for reassigned order')
+          }
+        }
+      }
 
       await fetchOrders()
       
@@ -365,10 +398,60 @@ export default function AdminOrderManagement() {
       }
       
       setAssigningOrder(null)
-      alert('Order assignment updated successfully!')
+      alert('Order assignment updated successfully!' + (editorId ? ' Pending revisions have been reassigned to the new editor.' : ''))
     } catch (error) {
       console.error('Error assigning editor:', error)
       alert('Error updating order assignment')
+    }
+  }
+
+  const handleAssignItemEditor = async (orderItemId, editorId) => {
+    try {
+      // Update the order item assignment
+      const { error: itemError } = await supabase
+        .from('order_items')
+        .update({ 
+          assigned_editor: editorId,
+          updated_at: new Date().toISOString()
+        })
+        .eq('id', orderItemId)
+
+      if (itemError) throw itemError
+
+      // Also update any pending revisions for this specific item
+      const { error: revisionsError } = await supabase
+        .from('revisions')
+        .update({ 
+          assigned_to: editorId, // Use item-specific editor, or null if unassigned
+          updated_at: new Date().toISOString()
+        })
+        .eq('order_item_id', orderItemId)
+        .eq('status', 'pending')
+
+      if (revisionsError) {
+        console.error('Error updating item revision assignments:', revisionsError)
+      }
+
+      await fetchOrders()
+      
+      // Update selectedOrder if it's the same order being updated
+      if (selectedOrder) {
+        const updatedOrderItems = selectedOrder.order_items?.map(item => 
+          item.id === orderItemId 
+            ? { ...item, assigned_editor: editorId }
+            : item
+        )
+        
+        setSelectedOrder({
+          ...selectedOrder,
+          order_items: updatedOrderItems
+        })
+      }
+      
+      alert('Item assignment updated successfully!')
+    } catch (error) {
+      console.error('Error assigning item editor:', error)
+      alert('Error updating item assignment')
     }
   }
 
@@ -1028,6 +1111,40 @@ export default function AdminOrderManagement() {
                             </div>
                           </div>
                         )}
+                        
+                        {/* Item-level Editor Assignment */}
+                        <div className="mt-4 pt-4 border-t border-gray-100">
+                          <div className="flex items-center justify-between">
+                            <div className="flex-1">
+                              <label className="block text-xs font-medium text-gray-700 mb-1">
+                                Assigned Editor for this item
+                              </label>
+                              <select
+                                value={item.assigned_editor || ''}
+                                onChange={(e) => handleAssignItemEditor(item.id, e.target.value || null)}
+                                className="w-full text-sm px-3 py-1.5 border border-gray-300 rounded-md focus:outline-none focus:ring-1 focus:ring-purple-500"
+                              >
+                                <option value="">Use order default ({
+                                  selectedOrder.assigned_editor ? 
+                                    editors.find(e => e.id === selectedOrder.assigned_editor)?.full_name || 'Unknown Editor'
+                                    : 'Not assigned'
+                                })</option>
+                                {editors.map(editor => (
+                                  <option key={editor.id} value={editor.id}>
+                                    {editor.full_name} ({editor.email})
+                                  </option>
+                                ))}
+                              </select>
+                            </div>
+                            {item.assigned_editor && (
+                              <div className="ml-3">
+                                <span className="inline-flex items-center px-2 py-1 rounded-full text-xs font-medium bg-purple-100 text-purple-800">
+                                  Item-specific
+                                </span>
+                              </div>
+                            )}
+                          </div>
+                        </div>
                       </div>
                       ))
                     ) : (

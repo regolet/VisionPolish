@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react'
 import { useNavigate, useSearchParams, Link } from 'react-router-dom'
+import { useAuth } from '../contexts/AuthContext'
 import { supabase } from '../lib/supabase'
 import { Check, Clock, Image, ArrowRight } from 'lucide-react'
 
@@ -7,28 +8,20 @@ export default function OrderSuccess() {
   const [searchParams] = useSearchParams()
   const orderId = searchParams.get('order')
   const navigate = useNavigate()
+  const { user, loading: authLoading } = useAuth()
   const [order, setOrder] = useState(null)
   const [orderItems, setOrderItems] = useState([])
   const [loading, setLoading] = useState(true)
-  const [user, setUser] = useState(null)
 
   useEffect(() => {
-    checkUser()
-  }, [])
-
-  useEffect(() => {
-    if (user && orderId) {
+    if (user && !authLoading && orderId) {
       fetchOrderDetails()
+    } else if (!authLoading && !user) {
+      setLoading(false)
     }
-  }, [user, orderId])
+  }, [user, authLoading, orderId])
 
-  const checkUser = async () => {
-    const { data: { session } } = await supabase.auth.getSession()
-    setUser(session?.user ?? null)
-    if (!session) {
-      navigate('/login')
-    }
-  }
+
 
   const fetchOrderDetails = async () => {
     setLoading(true)
@@ -68,7 +61,8 @@ export default function OrderSuccess() {
     }, 0)
   }
 
-  if (loading) {
+  // Show loading while auth is loading or while fetching order
+  if (authLoading || loading) {
     return (
       <div className="min-h-screen flex items-center justify-center">
         <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-purple-600"></div>

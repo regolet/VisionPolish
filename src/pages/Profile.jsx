@@ -9,12 +9,12 @@ import {
 } from 'lucide-react'
 
 export default function Profile() {
-  const [profile, setProfile] = useState(null)
-  const [user, setUser] = useState(null)
+  const [profileData, setProfileData] = useState(null)
   const [loading, setLoading] = useState(true)
   const [editing, setEditing] = useState(false)
   const [saving, setSaving] = useState(false)
   const [message, setMessage] = useState({ type: '', text: '' })
+  const { user, profile, loading: authLoading, signOut: authSignOut } = useAuth()
   const navigate = useNavigate()
 
   const [formData, setFormData] = useState({
@@ -32,20 +32,14 @@ export default function Profile() {
   const [changingPassword, setChangingPassword] = useState(false)
 
   useEffect(() => {
-    checkAuth()
-  }, [])
-
-  const checkAuth = async () => {
-    const { data: { session } } = await supabase.auth.getSession()
-    
-    if (!session) {
+    if (!authLoading && user && profile) {
+      // User is authenticated, load their profile data
+      fetchProfile(user.id)
+    } else if (!authLoading && !user) {
+      // No user, redirect to login
       navigate('/login')
-      return
     }
-
-    setUser(session.user)
-    await fetchProfile(session.user.id)
-  }
+  }, [user, profile, authLoading, navigate])
 
   const fetchProfile = async (userId) => {
     setLoading(true)
@@ -67,7 +61,7 @@ export default function Profile() {
         return
       }
 
-      setProfile(profileData)
+      setProfileData(profileData)
       setFormData({
         full_name: profileData.full_name || '',
         phone: profileData.phone || '',
@@ -96,7 +90,7 @@ export default function Profile() {
 
       if (error) throw error
       
-      setProfile(data)
+      setProfileData(data)
       setFormData({
         full_name: '',
         phone: '',
@@ -187,8 +181,7 @@ export default function Profile() {
     setSaving(false)
   }
 
-  const { signOut: authSignOut } = useAuth()
-  
+
   const handleSignOut = async () => {
     try {
       await authSignOut()
@@ -218,7 +211,7 @@ export default function Profile() {
     }
   }
 
-  if (loading) {
+  if (authLoading || loading) {
     return (
       <div className="min-h-screen flex items-center justify-center">
         <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-purple-600"></div>
@@ -321,7 +314,7 @@ export default function Profile() {
                   ) : (
                     <div className="flex items-center p-3 bg-gray-50 rounded-md">
                       <User className="h-4 w-4 text-gray-500 mr-2" />
-                      <span className="text-gray-700">{profile?.full_name || 'Not set'}</span>
+                      <span className="text-gray-700">{profileData?.full_name || 'Not set'}</span>
                     </div>
                   )}
                 </div>
@@ -342,7 +335,7 @@ export default function Profile() {
                   ) : (
                     <div className="flex items-center p-3 bg-gray-50 rounded-md">
                       <Phone className="h-4 w-4 text-gray-500 mr-2" />
-                      <span className="text-gray-700">{profile?.phone || 'Not set'}</span>
+                      <span className="text-gray-700">{profileData?.phone || 'Not set'}</span>
                     </div>
                   )}
                 </div>
@@ -363,7 +356,7 @@ export default function Profile() {
                   ) : (
                     <div className="flex items-center p-3 bg-gray-50 rounded-md">
                       <User className="h-4 w-4 text-gray-500 mr-2" />
-                      <span className="text-gray-700">{profile?.department || 'Not set'}</span>
+                      <span className="text-gray-700">{profileData?.department || 'Not set'}</span>
                     </div>
                   )}
                 </div>

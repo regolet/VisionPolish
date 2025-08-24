@@ -3,31 +3,24 @@ import { Trash2, ShoppingBag, ArrowRight } from 'lucide-react'
 import { supabase } from '../lib/supabase'
 import { Link, useNavigate } from 'react-router-dom'
 import { useNotification } from '../contexts/NotificationContext'
+import { useAuth } from '../contexts/AuthContext'
 
 export default function Cart() {
   const { showSuccess, showError } = useNotification()
+  const { user, loading: authLoading } = useAuth()
   const [cartItems, setCartItems] = useState([])
   const [loading, setLoading] = useState(true)
-  const [user, setUser] = useState(null)
   const navigate = useNavigate()
 
   useEffect(() => {
-    checkUser()
-  }, [])
-
-  useEffect(() => {
-    if (user) {
+    if (user && !authLoading) {
       fetchCartItems()
+    } else if (!authLoading && !user) {
+      setLoading(false)
     }
-  }, [user])
+  }, [user, authLoading])
 
-  const checkUser = async () => {
-    const { data: { session } } = await supabase.auth.getSession()
-    setUser(session?.user ?? null)
-    if (!session) {
-      navigate('/login')
-    }
-  }
+
 
   const fetchCartItems = async () => {
     console.log('🛒 Fetching cart items for user:', user?.id)
@@ -139,7 +132,8 @@ export default function Cart() {
     }
   }
 
-  if (loading) {
+  // Show loading while auth is loading or while fetching cart
+  if (authLoading || loading) {
     return (
       <div className="min-h-screen flex items-center justify-center">
         <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-purple-600"></div>
